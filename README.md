@@ -19,4 +19,5 @@ It retains eUTXO, ErgoScript and Autolykos v2.
 Team payments are enforced by consensus. All rewards use integer nanoZYRX units.
 
 Public testnet is live; mainnet is not launched.
+Downloads: [GitHub Releases](https://github.com/zyrexchain/zyrex/releases).
 The upstream [CC0 license](LICENSE) and attribution are retained.
