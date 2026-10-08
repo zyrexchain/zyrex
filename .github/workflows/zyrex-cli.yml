@@ -1,0 +1,29 @@
+name: Zyrex Linux CLI
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  portable-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Check English public content
+        run: python3 scripts/check-public-content.py
+      - name: Test exact amounts, node pinning and credential isolation
+        working-directory: cli
+        run: go test ./...
+      - name: Build static x86_64 and ARM64 binaries
+        run: scripts/build-cli
+      - name: Check dependency-free execution on Ubuntu 24.04 and an empty Linux image
+        run: |
+          docker run --rm --read-only --memory=64m \
+            -v "$PWD/artifacts/cli/zyrex-cli-linux-amd64/zyrex-cli:/usr/local/bin/zyrex-cli:ro" \
+            ubuntu:24.04 zyrex-cli version
+          printf 'FROM scratch\nCOPY zyrex-cli /zyrex-cli\nENTRYPOINT ["/zyrex-cli"]\n' > /tmp/Dockerfile.zyrex-cli
+          docker build -f /tmp/Dockerfile.zyrex-cli -t zyrex-cli-check artifacts/cli/zyrex-cli-linux-amd64
+          docker run --rm --read-only --memory=64m zyrex-cli-check version

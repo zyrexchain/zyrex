@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../cli"
+cli_go="${GO_BIN:-go}"
+cli_output=../artifacts/cli
+mkdir -p "$cli_output"
+CGO_ENABLED=0 GOMAXPROCS=2 "$cli_go" test ./...
+for cli_arch in amd64 arm64; do
+    cli_folder="$cli_output/zyrex-cli-linux-$cli_arch"
+    mkdir -p "$cli_folder/licenses"
+    CGO_ENABLED=0 GOOS=linux GOARCH="$cli_arch" GOAMD64=v1 GOMAXPROCS=2 \
+        "$cli_go" build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$cli_folder/zyrex-cli" .
+    cp ../LICENSE "$cli_folder/LICENSE"
+    cp "$("$cli_go" env GOROOT)/LICENSE" "$cli_folder/licenses/GO-LICENSE.txt"
+    tar -czf "$cli_output/zyrex-cli-linux-$cli_arch.tar.gz" -C "$cli_folder" .
+done
+(cd "$cli_output" && sha256sum zyrex-cli-linux-*.tar.gz > SHA256SUMS)
+printf 'Linux CLI artifacts: artifacts/cli/\n'

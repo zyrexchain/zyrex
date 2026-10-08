@@ -71,6 +71,14 @@ server {{
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
     client_max_body_size 16k;
+    location /downloads/ {{
+        limit_except GET HEAD {{ deny all; }}
+        root /var/www/zyrex-pool;
+        default_type application/octet-stream;
+        add_header Content-Disposition attachment;
+        add_header X-Content-Type-Options nosniff;
+        try_files $uri =404;
+    }}
     location / {{
         limit_except GET HEAD {{ deny all; }}
         proxy_pass http://$zyrex_web_backend;
@@ -104,6 +112,13 @@ server {{
         try_files /index.html =404;
     }}
     location = /favicon.svg {{ try_files /favicon.svg =404; }}
+    location /downloads/ {{
+        limit_except GET HEAD {{ deny all; }}
+        default_type application/octet-stream;
+        add_header Content-Disposition attachment;
+        add_header X-Content-Type-Options nosniff;
+        try_files $uri =404;
+    }}
     location ~ ^/(api/stats|health)$ {{
         limit_except GET HEAD {{ deny all; }}
         proxy_pass http://127.0.0.1:28088;
