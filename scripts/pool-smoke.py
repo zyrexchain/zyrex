@@ -33,6 +33,22 @@ def api(url, key=None):
         return json.load(response)
 
 
+def wait_for_received_payment(port, payout_id, address, amount, confirmations=5, timeout=120):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            tx = api(f"http://127.0.0.1:{port}/wallet/transactionById?id={payout_id}", "hello")
+        except OSError:
+            time.sleep(1)
+            continue
+        if tx.get("numConfirmations", 0) >= confirmations:
+            assert any(o["value"] == amount and o["address"] == address for o in tx["outputs"]), \
+                "Confirmed receiving transaction has incorrect payout outputs"
+            return tx
+        time.sleep(1)
+    raise RuntimeError(f"Receiving wallet at port {port} did not confirm payout {payout_id}")
+
+
 class Miner:
     def __init__(self, host, address, name, executor):
         self.host, self.address, self.name, self.executor = host, address, name, executor
@@ -182,9 +198,7 @@ def verify(args, miners):
             amounts = json.loads(payout["amounts"])
             if payout["status"] != "confirmed" or address not in amounts:
                 continue
-            tx = api(f"http://127.0.0.1:{port}/wallet/transactionById?id={payout['id']}", "hello")
-            assert tx["numConfirmations"] >= 5
-            assert any(o["value"] == amounts[address] and o["address"] == address for o in tx["outputs"])
+            wait_for_received_payment(port, payout["id"], address, amounts[address])
             payments.append(payout["id"])
         assert payments
         received.append({"address": address, "confirmedPayments": payments})

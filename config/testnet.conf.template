@@ -1,67 +1,7 @@
-# Zyrex testnet NOT LAUNCHED. Fill recipients and pin a new genesis before release.
-zyrex {
-  networkType = "testnet"
-  node {
-    mining = false
-    offlineGeneration = false
-    useExternalMiner = false
-    stateType = "utxo"
-    verifyTransactions = true
-    internalMinerPollingInterval = 1s
-    utxo.utxoBootstrap = false
-    nipopow.nipopowBootstrap = false
-  }
-  chain {
-    protocolVersion = 4
-    addressPrefix = 64
-    blockInterval = 60s
-    epochLength = 2048
-    useLastEpochs = 8
-    initialDifficultyHex = "01"
-    genesisStateDigestHex = "000000000000000000000000000000000000000000000000000000000000000000"
-    noPremineProof = ["Zyrex ZYRX testnet not launched"]
-    foundersPubkeys = []
-    monetary {
-      fixedRate = 100000000000
-      fixedRatePeriod = 432000
-      epochLength = 432000
-      foundersInitialReward = 10000000000
-      minerRewardDelay = 1440
-    }
-    reemission {
-      checkReemissionRules = false
-      activationHeight = 2147483647
-      reemissionStartHeight = 2147483647
-    }
-    zyrex {
-      networkTag = 1515803220
-      founderPubkeys = []
-    }
-    voting {
-      votingLength = 128
-      softForkEpochs = 8
-      activationEpochs = 8
-      version2ActivationHeight = 0
-      version2ActivationDifficultyHex = "01"
-    }
-    makeSnapshotEvery = 1024
-  }
-  wallet.checkEIP27 = false
-  wallet.secretStorage.secretDir = ${zyrex.directory}"/wallet/keystore"
-  voting = {}
-}
-scorex {
-  network {
-    agentName = "zyrex"
-    magicBytes = [90, 89, 82, 84]
-    bindAddress = "0.0.0.0:19531"
-    nodeName = "zyrex-testnet"
-    knownPeers = []
-    peerDiscovery = false
-    upnpEnabled = false
-  }
-  restApi {
-    bindAddress = "127.0.0.1:19554"
-    apiKeyHash = "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf"
-  }
-}
+# Zyrex public testnet operator overrides. Network rules are bundled in the node.
+zyrex.node.mining = false
+scorex.network.nodeName = "zyrex-testnet-node"
+scorex.network.bindAddress = "0.0.0.0:19531"
+scorex.network.knownPeers = ["stratum.zyrexchain.com:19531", "stratum.zyrexchain.com:19533"]
+scorex.restApi.bindAddress = "127.0.0.1:19554"
+# Set a strong private API key hash before using wallet operations.

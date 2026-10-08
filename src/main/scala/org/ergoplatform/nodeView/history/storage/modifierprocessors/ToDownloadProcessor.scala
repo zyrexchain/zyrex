@@ -140,10 +140,12 @@ trait ToDownloadProcessor
     * bootstrap path must not do that (see above).
     */
   private def markHeadersSyncedIfFresh(header: Header, updateBestBlock: Boolean = false): Unit = {
-    val privateGenesis = chainSettings.zyrex.nonEmpty &&
-      settings.networkType == org.ergoplatform.settings.NetworkType.DevNet &&
+    val launchGenesis = chainSettings.zyrex.nonEmpty &&
+      Set[org.ergoplatform.settings.NetworkType](
+        org.ergoplatform.settings.NetworkType.DevNet, org.ergoplatform.settings.NetworkType.TestNet)
+        .contains(settings.networkType) &&
       chainSettings.genesisId.contains(header.id)
-    if (!isHeadersChainSynced && (privateGenesis || header.isNew(chainSettings.blockInterval * headerChainDiff))) {
+    if (!isHeadersChainSynced && (launchGenesis || header.isNew(chainSettings.blockInterval * headerChainDiff))) {
       if (updateBestBlock) {
         updateBestFullBlock(header)
       } else {

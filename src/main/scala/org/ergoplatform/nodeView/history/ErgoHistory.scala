@@ -294,12 +294,15 @@ object ErgoHistory extends ScorexLogging {
 
     repairIfNeeded(history)
 
-    // A private network starts from a bundled, pinned genesis; it can be older than
+    // A launch network starts from a bundled, pinned genesis; it can be older than
     // the header freshness window on a later restart. Keep full verification enabled.
-    if (ergoSettings.chainSettings.zyrex.nonEmpty && ergoSettings.networkType == org.ergoplatform.settings.NetworkType.DevNet &&
+    if (ergoSettings.chainSettings.zyrex.nonEmpty &&
+        Set[org.ergoplatform.settings.NetworkType](
+          org.ergoplatform.settings.NetworkType.DevNet, org.ergoplatform.settings.NetworkType.TestNet)
+          .contains(ergoSettings.networkType) &&
         history.bestHeaderOpt.nonEmpty) {
       require(ergoSettings.chainSettings.genesisId.exists(id => history.headerIdsAtHeight(1).contains(id)),
-        "Existing data belongs to a different Zyrex private network")
+        "Existing data belongs to a different Zyrex network")
       history.setHeadersChainSynced()
     }
 

@@ -4,12 +4,13 @@ permissions:
   contents: read
 jobs:
   consensus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '11'
@@ -17,8 +18,12 @@ jobs:
         run: python3 scripts/check-public-content.py
       - name: LAN pool PoW, Stratum and durable payout tests
         run: python3 -m unittest discover -s pool -p 'test_*.py' -v
+      - name: Explorer canonical index and rollback tests
+        run: PYTHONPATH=pool python3 -m unittest discover -s explorer -p 'test_*.py' -v
       - name: Consensus, address, network and upstream PoW/DAA tests
-        run: scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *MessageSerializerSpecification' 'ergoCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec' assembly
+        run: >-
+          scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *MessageSerializerSpecification *NetworkControllerSpec'
+          'ergoCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec' assembly
       - name: Launch three private nodes
         run: scripts/devnet-up
       - name: Test payments, payouts and restart recovery

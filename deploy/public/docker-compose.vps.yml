@@ -1,0 +1,25 @@
+name: zyrex-testnet-vps
+services:
+  node:
+    image: zyrex:public-testnet
+    restart: unless-stopped
+    command: [--testnet, -c, /etc/zyrex/node.conf]
+    environment:
+      DATADIR: /var/lib/zyrex
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx512m -XX:ActiveProcessorCount=1
+    mem_limit: 896m
+    cpus: 0.6
+    ports:
+      - "19531:19531"
+      - "127.0.0.1:19554:19554"
+    volumes:
+      - node:/var/lib/zyrex
+      - ./node.conf:/etc/zyrex/node.conf:ro
+    healthcheck:
+      test: [CMD, curl, -fsS, --max-time, "5", http://127.0.0.1:19554/info]
+      interval: 10s
+      timeout: 6s
+      retries: 30
+    stop_grace_period: 30s
+volumes:
+  node: {}

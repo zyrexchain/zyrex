@@ -5,7 +5,7 @@ Public-testnet deployment is in progress; the endpoints below are the public ser
 
 | Service | Endpoint |
 | --- | --- |
-| Website | https://zyrexchain.com |
+| Website | https://pool.zyrexchain.com |
 | Stratum TCP | `stratum+tcp://stratum.zyrexchain.com:3333` |
 | Stratum TLS | `stratum+ssl://stratum.zyrexchain.com:3443` |
 

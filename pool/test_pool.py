@@ -157,6 +157,27 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(candidate_calls, 2)
 
 
+class ReceivingWalletTests(unittest.TestCase):
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "scripts/pool-smoke.py"
+        spec = importlib.util.spec_from_file_location("pool_smoke", path)
+        self.smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.smoke)
+
+    def test_lagging_wallet_waits_for_actual_five_confirmations(self):
+        replies = [{"numConfirmations": n, "outputs": [{"value": 100, "address": ADDRESS1}]} for n in (0, 4, 5)]
+        with patch.object(self.smoke, "api", side_effect=replies) as rpc, patch.object(self.smoke.time, "sleep"):
+            result = self.smoke.wait_for_received_payment(19556, "tx", ADDRESS1, 100)
+        self.assertEqual(result["numConfirmations"], 5)
+        self.assertEqual(rpc.call_count, 3)
+
+    def test_confirmed_wrong_recipient_is_not_accepted(self):
+        tx = {"numConfirmations": 5, "outputs": [{"value": 100, "address": ADDRESS2}]}
+        with patch.object(self.smoke, "api", return_value=tx):
+            with self.assertRaises(AssertionError):
+                self.smoke.wait_for_received_payment(19556, "tx", ADDRESS1, 100)
+
+
 class AccountingTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()

@@ -47,7 +47,7 @@ def main():
     for name in ('fullchain.pem', 'privkey.pem'):
         if not (certificate / name).is_file():
             raise RuntimeError('Certificate has not been issued')
-    names = f'{domain} explorer.{domain} stratum.{domain}'
+    names = f'{domain} explorer.{domain} stratum.{domain} pool.{domain}'
     http_config = f'''map $host $zyrex_web_backend {{
     default 127.0.0.1:28088;
     explorer.{domain} 127.0.0.1:28080;
@@ -65,7 +65,7 @@ server {{
 }}
 server {{
     listen 127.0.0.1:28443 ssl;
-    server_name {names};
+    server_name {domain} explorer.{domain} stratum.{domain};
     ssl_certificate {certificate}/fullchain.pem;
     ssl_certificate_key {certificate}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -87,11 +87,37 @@ server {{
         return 503 "Zyrex public testnet services are starting.\\n";
     }}
 }}
+server {{
+    listen 127.0.0.1:28443 ssl;
+    server_name pool.{domain};
+    ssl_certificate {certificate}/fullchain.pem;
+    ssl_certificate_key {certificate}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    root /var/www/zyrex-pool;
+    location = / {{
+        limit_except GET HEAD {{ deny all; }}
+        try_files /index.html =404;
+    }}
+    location = /index.html {{
+        limit_except GET HEAD {{ deny all; }}
+        try_files /index.html =404;
+    }}
+    location = /favicon.svg {{ try_files /favicon.svg =404; }}
+    location ~ ^/(api/stats|health)$ {{
+        limit_except GET HEAD {{ deny all; }}
+        proxy_pass http://127.0.0.1:28088;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 15s;
+    }}
+    location / {{ return 404; }}
+}}
 '''
     stream_config = f'''map $ssl_preread_server_name $zyrex_tls_backend {{
     {domain} 127.0.0.1:28443;
     explorer.{domain} 127.0.0.1:28443;
     stratum.{domain} 127.0.0.1:28443;
+    pool.{domain} 127.0.0.1:28443;
     default 127.0.0.1:12443;
 }}
 server {{

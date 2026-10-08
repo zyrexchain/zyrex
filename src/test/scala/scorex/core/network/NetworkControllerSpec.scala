@@ -5,7 +5,7 @@ import akka.io.Tcp
 import akka.testkit.{TestActorRef, TestProbe}
 import org.ergoplatform.network.ErgoNodeViewSynchronizerMessages.DisconnectedPeer
 import org.ergoplatform.network.message.MessageConstants.MessageCode
-import org.ergoplatform.network.peer.PeerInfo
+import org.ergoplatform.network.peer.{LocalAddressPeerFeature, PeerInfo}
 import org.ergoplatform.utils.ErgoCorePropertyTest
 import org.scalacheck.Gen
 import scorex.core.app.ScorexContext
@@ -28,7 +28,9 @@ class NetworkControllerSpec extends ErgoCorePropertyTest {
 
     case class EstablishedConnection(connectionProbe: TestProbe, handlerRef: ActorRef)
 
-    def createController(maxConnections: Int): (TestActorRef[NetworkController], TestProbe, TestProbe) = {
+    def createController(maxConnections: Int,
+                         externalAddress: Option[InetSocketAddress] = None):
+        (TestActorRef[NetworkController], TestProbe, TestProbe) = {
       val peerManagerProbe = TestProbe("PeerManager")
       val tcpManagerProbe = TestProbe("TcpManager")
 
@@ -43,7 +45,7 @@ class NetworkControllerSpec extends ErgoCorePropertyTest {
       val controller = TestActorRef(new NetworkController(
         testSettings,
         peerManagerProbe.ref,
-        scorexContext,
+        scorexContext.copy(externalNodeAddress = externalAddress),
         tcpManagerProbe.ref,
         _ => Map.empty[MessageCode, ActorRef]
       ))
@@ -379,6 +381,21 @@ class NetworkControllerSpec extends ErgoCorePropertyTest {
       )
       controller ! NetworkController.ReceivableMessages.ConnectTo(extraPeer)
       tcpManagerProbe.expectMsgType[Tcp.Connect]
+    }
+  }
+
+  property("shared public IP connects through the advertised port without UPnP") {
+    withFixture { f =>
+      val own = new InetSocketAddress("203.0.113.10", 19533)
+      val remote = new InetSocketAddress("203.0.113.10", 19531)
+      for (features <- Seq(Seq.empty, Seq(LocalAddressPeerFeature(new InetSocketAddress("172.20.0.2", 19531))))) {
+        val (controller, _, tcpManagerProbe) = f.createController(10, Some(own))
+        val peer = PeerInfo(defaultPeerSpec.copy(declaredAddress = Some(remote), features = features),
+          System.currentTimeMillis())
+        controller ! NetworkController.ReceivableMessages.ConnectTo(peer)
+        tcpManagerProbe.expectMsgType[Tcp.Connect].remoteAddress shouldBe remote
+        f.system.stop(controller)
+      }
     }
   }
 

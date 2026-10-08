@@ -305,7 +305,7 @@ class Pool:
                 return
             header = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
             first = header.decode("ascii").split("\r\n")[0].split(" ")
-            path = first[1] if len(first) == 3 and first[0] == "GET" else ""
+            path = first[1] if len(first) == 3 and first[0] in ("GET", "HEAD") else ""
             status, content_type = "200 OK", "application/json"
             if path in ("/api/stats", "/health"):
                 result = self.ledger.stats()
@@ -327,7 +327,8 @@ class Pool:
             else:
                 status, body = "404 Not Found", b'{}'
             writer.write((f"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\n"
-                          "Cache-Control: no-store\r\nConnection: close\r\n\r\n").encode() + body)
+                          "Cache-Control: no-store\r\nConnection: close\r\n\r\n").encode() +
+                         (body if first[0] != "HEAD" else b""))
             await asyncio.wait_for(writer.drain(), 5)
         except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):
             pass

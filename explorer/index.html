@@ -1,0 +1,45 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zyrex Explorer</title><style>
+body{margin:0;background:#101714;color:#eaf5ee;font:16px system-ui,sans-serif}main{max-width:1100px;margin:40px auto;padding:24px}
+a{color:#71f5be;cursor:pointer}h1{font-size:42px;margin:12px 0}.tag{color:#71f5be;letter-spacing:.15em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin:28px 0}
+.card{background:#1d2923;padding:20px;border-radius:12px}.value{font-size:25px;margin-top:10px}small{color:#a8bdb0}
+input{background:#1d2923;color:inherit;border:1px solid #31463a;padding:14px;border-radius:8px;width:75%}
+button{background:#71f5be;border:0;color:#101714;padding:14px;border-radius:8px;cursor:pointer}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #31463a}
+code{word-break:break-all}pre{white-space:pre-wrap;word-break:break-all;background:#1d2923;padding:20px;border-radius:12px}
+.error{color:#ff7768}.table{overflow:auto}
+</style><main><div class="tag">ZYREX / PUBLIC TESTNET</div><h1>Block Explorer</h1>
+<p><a href="https://pool.zyrexchain.com">Mining pool</a> · Autolykos v2 · Test coins</p><p id="status">Connecting…</p>
+<div class="grid"><div class="card"><small>Node height</small><div class="value" id="height">—</div></div>
+<div class="card"><small>Indexed height</small><div class="value" id="indexed">—</div></div>
+<div class="card"><small>Issued ZYRX</small><div class="value" id="supply">—</div></div>
+<div class="card"><small>Connected peers</small><div class="value" id="peers">—</div></div></div>
+<form id="search"><input id="query" placeholder="Block height, block ID, transaction ID or ZRX address" required>
+<button>Search</button></form><div id="detail"></div><h2>Latest blocks</h2>
+<div class="table"><table><thead><tr><th>Height</th><th>Block ID</th><th>Time (UTC)</th><th>Transactions</th></tr></thead>
+<tbody id="blocks"></tbody></table></div><p><small>Observed through a full node. This explorer is not an independent light client.</small></p>
+</main><script>
+const $=id=>document.getElementById(id);
+function coin(n){let v=BigInt(n),s=(v%1000000000n).toString().padStart(9,'0').replace(/0+$/,'');
+return (v/1000000000n).toString()+(s?'.'+s:'');}
+function link(text,key){let a=document.createElement('a');a.textContent=text;a.href='#'+encodeURIComponent(key);return a;}
+async function api(path){let r=await fetch(path);let value=await r.json();if(!r.ok)throw Error(value.error||r.status);return value;}
+async function refresh(){try{let s=await api('/api/status');$('height').textContent=s.node?.fullHeight??'—';
+$('indexed').textContent=s.indexedHeight;$('supply').textContent=coin(s.emittedNano);$('peers').textContent=s.node?.peersCount??'—';
+$('status').textContent=s.ready?'Observing the canonical chain':s.error||'Synchronizing';$('status').className=s.ready?'':'error';
+let blocks=await api('/api/blocks');$('blocks').replaceChildren();for(let b of blocks){let tr=document.createElement('tr');
+for(let item of [link(b.height,b.height),link(b.id.slice(0,20)+'…',b.id),new Date(b.timestamp).toISOString(),b.transactionCount]){
+let td=document.createElement('td');if(item instanceof Node)td.append(item);else td.textContent=item;tr.append(td);}$('blocks').append(tr);}
+}catch(e){$('status').textContent='Explorer unavailable';$('status').className='error';}}
+async function search(key){$('query').value=key;$('detail').replaceChildren();try{let value;
+if(key.startsWith('ZRX'))value=await api('/api/address/'+encodeURIComponent(key));
+else{try{value=await api('/api/block/'+encodeURIComponent(key));}catch(e){value=await api('/api/tx/'+encodeURIComponent(key));}}
+let heading=document.createElement('h2');heading.textContent=value.address?'Address':value.header?'Block':'Transaction';
+$('detail').append(heading);if(value.address){let p=document.createElement('p');p.textContent='Balance: '+coin(value.balanceNano)+' ZYRX';
+$('detail').append(p);}let pre=document.createElement('pre');pre.textContent=JSON.stringify(value,null,2);$('detail').append(pre);
+}catch(e){let p=document.createElement('p');p.className='error';p.textContent=e.message;$('detail').append(p);}}
+$('search').addEventListener('submit',e=>{e.preventDefault();location.hash=encodeURIComponent($('query').value.trim());});
+window.addEventListener('hashchange',()=>search(decodeURIComponent(location.hash.slice(1))));
+refresh();setInterval(refresh,5000);if(location.hash)search(decodeURIComponent(location.hash.slice(1)));
+</script></html>

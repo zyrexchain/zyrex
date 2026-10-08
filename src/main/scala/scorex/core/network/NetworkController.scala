@@ -520,13 +520,14 @@ class NetworkController(ergoSettings: ErgoSettings,
     */
   private def getPeerAddress(peer: PeerInfo): Option[InetSocketAddress] = {
     (peer.peerSpec.localAddressOpt, peer.peerSpec.declaredAddress) match {
-      case (Some(localAddr), _) =>
-        Some(localAddr)
-
-      case (None, Some(declaredAddress))
+      case (_, Some(declaredAddress))
         if scorexContext.externalNodeAddress.exists(_.getAddress == declaredAddress.getAddress) =>
 
         scorexContext.upnpGateway.flatMap(_.getLocalAddressForExternalPort(declaredAddress.getPort))
+          .orElse(Some(declaredAddress))
+
+      case (Some(localAddr), _) =>
+        Some(localAddr)
 
       case _ => peer.peerSpec.declaredAddress
     }

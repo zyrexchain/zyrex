@@ -1,0 +1,8 @@
+*
+!explorer/
+explorer/*
+!explorer/server.py
+!explorer/index.html
+!pool/
+pool/*
+!pool/pow.py
