@@ -1,0 +1,232 @@
+package org.ergoplatform.modifiers.history
+
+import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.concurrent.atomic.AtomicReference
+
+import org.ergoplatform.modifiers.history.popow.{NipopowAlgos, NipopowProof, PoPowHeader, PoPowParams}
+import org.ergoplatform.modifiers.ErgoFullBlock
+import org.scalacheck.Gen
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.propspec.AnyPropSpec
+import scorex.util.ModifierId
+
+class PoPowAlgosSpec extends AnyPropSpec with Matchers {
+  import org.ergoplatform.utils.generators.ChainGenerator._
+  import org.ergoplatform.utils.generators.CoreObjectGenerators._
+  import org.ergoplatform.utils.ErgoCoreTestConstants._
+
+  private val poPowParams = PoPowParams(30, 30, continuous = false).get
+  private val ChainLength = 10
+
+  private def toPoPoWChain = (c: Seq[ErgoFullBlock]) => c.map(b => PoPowHeader.fromBlock(b).get)
+
+  property("PoPowParams rejects invalid minimum chain lengths") {
+    PoPowParams.isValid(0, 1) shouldBe false
+    PoPowParams.isValid(1, 0) shouldBe false
+    PoPowParams.isValid(Int.MaxValue, 1) shouldBe false
+
+    PoPowParams(0, 1, continuous = false) shouldBe 'failure
+    PoPowParams(1, 0, continuous = false) shouldBe 'failure
+    PoPowParams(Int.MaxValue, 1, continuous = false) shouldBe 'failure
+
+    PoPowParams.isValid(Int.MaxValue - 1, 1) shouldBe true
+    PoPowParams(1, 1, continuous = false).get.minChainLength shouldBe 2
+  }
+
+  property("bestArg rejects a non-positive security parameter without looping") {
+    val algos = nipopowAlgos
+    val completed = new CountDownLatch(1)
+    val error = new AtomicReference[Throwable]()
+    val worker = new Thread(new Runnable {
+      override def run(): Unit =
+        try {
+          algos.bestArg(Seq.empty)(0)
+        } catch {
+          case t: Throwable => error.set(t)
+        } finally {
+          completed.countDown()
+        }
+    })
+    worker.setDaemon(true)
+    worker.start()
+
+    completed.await(2, TimeUnit.SECONDS) shouldBe true
+    error.get() shouldBe a[IllegalArgumentException]
+  }
+
+  property("updateInterlinks") {
+    val chain = genChain(ChainLength)
+    val genesis = chain.head
+    val interlinks = chain.foldLeft(Seq.empty[Seq[ModifierId]]) { case (acc, b) =>
+      acc :+ (if (acc.isEmpty) {
+        nipopowAlgos.updateInterlinks(b.header, Seq.empty)
+      } else {
+        nipopowAlgos.updateInterlinks(b.header, acc.last)
+      })
+    }
+
+    interlinks.foreach { links =>
+      links.head shouldEqual genesis.header.id
+      links.tail should not contain genesis.header.id
+    }
+
+    interlinks.zipWithIndex.foreach { case (links, idx) =>
+      if (idx > 0) links.size >= interlinks(idx - 1).size shouldBe true
+    }
+  }
+
+  property("packInterlinks") {
+    val diffInterlinks = Gen.listOfN(255, modifierIdGen).sample.get
+    val modId = modifierIdGen.sample.get
+    val sameInterlinks = List.fill(255)(modId)
+    val packedDiff = nipopowAlgos.interlinksToExtension(diffInterlinks).fields
+    val packedSame = nipopowAlgos.interlinksToExtension(sameInterlinks).fields
+
+    packedDiff.map(_._1.last).toSet.size shouldEqual diffInterlinks.size
+    packedSame.map(_._1.last).toSet.size shouldEqual 1
+  }
+
+  property("unpackInterlinks") {
+    val interlinks = Gen.listOfN(255, modifierIdGen).sample.get
+    val packed = nipopowAlgos.interlinksToExtension(interlinks).fields
+    val improperlyPacked = packed.map(x => x._1 -> (x._2 :+ (127: Byte)))
+
+    val unpackedTry = NipopowAlgos.unpackInterlinks(packed)
+
+    unpackedTry shouldBe 'success
+    NipopowAlgos.unpackInterlinks(improperlyPacked) shouldBe 'failure
+
+    unpackedTry.get shouldEqual interlinks
+  }
+
+  property("proofForInterlinkVector") {
+    val blockIds = Gen.listOfN(255, modifierIdGen).sample.get
+    val extension = nipopowAlgos.interlinksToExtension(blockIds)
+    val proof = NipopowAlgos.proofForInterlinkVector(extension)
+    proof.get.valid(extension.digest) shouldBe true
+  }
+
+  property("empty proofForInterlinkVector should be None") {
+    val blockIds = Seq.empty[ModifierId]
+    val extension = nipopowAlgos.interlinksToExtension(blockIds)
+    val proof = NipopowAlgos.proofForInterlinkVector(extension)
+    proof shouldBe defined
+    proof.get.proofs should have length 0
+    proof.get.indices should have length 0
+  }
+
+  property("0 level is always valid for any block") {
+    val chain = genChain(10)
+    chain.foreach(x => nipopowAlgos.maxLevelOf(x.header) >= 0 shouldBe true)
+  }
+
+  property("lowestCommonAncestor - diverging") {
+    val sizes = Seq(10, 100, 1000)
+    sizes.foreach { size =>
+      val chain0 = genChain(size)
+      val branchPoint = chain0(size / 2)
+      val chain1 = chain0.take(size / 2) ++ genChain(size / 2, branchPoint)
+
+      nipopowAlgos.lowestCommonAncestor(chain0.map(_.header), chain1.map(_.header)) shouldBe Some(branchPoint.header)
+    }
+  }
+
+  property("lowestCommonAncestor - the same") {
+    val sizes = Seq(10, 100, 1000)
+    sizes.foreach { size =>
+      val chain0 = genChain(size)
+      val chain1 = chain0.map(b => b.copy(header = b.header.copy(sizeOpt = Some(b.header.size))))
+
+      nipopowAlgos.lowestCommonAncestor(chain0.map(_.header), chain1.map(_.header)) shouldBe Some(chain0.last.header)
+    }
+  }
+
+  property("bestArg - always equal for equal proofs") {
+    val chain0 = genChain(100).map(b => PoPowHeader.fromBlock(b).get)
+    val proof0 = nipopowAlgos.prove(chain0)(poPowParams).get
+    val chain1 = genChain(100).map(b => PoPowHeader.fromBlock(b).get)
+    val proof1 = nipopowAlgos.prove(chain1)(poPowParams).get
+    val m = poPowParams.m
+
+    proof0.prefix.size shouldEqual proof1.prefix.size
+
+    nipopowAlgos.bestArg(proof0.prefix.map(_.header))(m) shouldEqual nipopowAlgos.bestArg(proof1.prefix.map(_.header))(m)
+  }
+
+  property("bestArg - always greater for better proof") {
+    val chain0 = genChain(100).map(b => PoPowHeader.fromBlock(b).get)
+    val proof0 = nipopowAlgos.prove(chain0)(poPowParams).get
+    val chain1 = genChain(70).map(b => PoPowHeader.fromBlock(b).get)
+    val proof1 = nipopowAlgos.prove(chain1)(poPowParams).get
+    val m = poPowParams.m
+
+    proof0.prefix.size > proof1.prefix.size shouldBe true
+
+    nipopowAlgos.bestArg(proof0.prefix.map(_.header))(m) > nipopowAlgos.bestArg(proof1.prefix.map(_.header))(m) shouldBe true
+  }
+
+  property("isBetterThan - marginally longer chain should be better") {
+    val sizes = Seq(1000)
+    sizes.foreach { size =>
+      val baseChain = genChain(size)
+      val branchPoint = baseChain(baseChain.length - 1)
+      val shortChain = toPoPoWChain(baseChain)
+      val longChain = toPoPoWChain(baseChain ++ genChain(1, branchPoint).takeRight(1))
+
+      val shortProof = nipopowAlgos.prove(shortChain)(poPowParams).get
+      val longProof = nipopowAlgos.prove(longChain)(poPowParams).get
+
+      shortProof.isBetterThan(longProof) shouldBe false
+    }
+  }
+
+  property("isBetterThan - a disconnected prefix chain should not win") {
+    val smallPoPowParams = PoPowParams(50, 1, continuous = false).get
+    val size = 100
+    val chain = toPoPoWChain(genChain(size))
+    val proof = nipopowAlgos.prove(chain)(smallPoPowParams).get
+
+    val longerChain = toPoPoWChain(genChain(size * 2))
+    val longerProof = nipopowAlgos.prove(longerChain)(smallPoPowParams).get
+
+    val disconnectedProofPrefix = proof.prefix.take(proof.prefix.length / 2) ++ longerProof.prefix
+    val disconnectedProof = NipopowProof(nipopowAlgos, proof.m, proof.k, disconnectedProofPrefix, proof.suffixHead, proof.suffixTail, continuous = false)
+    proof.isBetterThan(disconnectedProof) shouldBe true
+  }
+
+  property("hasValidConnections - ensures a connected prefix chain") {
+    val smallPoPowParams = PoPowParams(5, 5, continuous = false).get
+    val sizes = Seq(100, 200)
+    sizes.foreach { size =>
+      val chain = toPoPoWChain(genChain(size))
+      val randomBlock = toPoPoWChain(genChain(1)).head
+      val proof = nipopowAlgos.prove(chain)(smallPoPowParams).get
+      val disconnectedProofPrefix = proof.prefix.updated(proof.prefix.length / 2, randomBlock)
+      val disconnectedProof = NipopowProof(nipopowAlgos, proof.m, proof.k, disconnectedProofPrefix, proof.suffixHead, proof.suffixTail, continuous = false)
+      proof.hasValidConnections shouldBe true
+      disconnectedProof.hasValidConnections shouldBe false
+    }
+  }
+
+  property("hasValidConnections - ensures a connected suffix chain") {
+    val smallPoPowParams = PoPowParams(5, 5, continuous = false).get
+    val sizes = Seq(100, 200)
+
+    sizes.foreach { size =>
+      val chain = toPoPoWChain(genChain(size))
+      val randomBlock = genChain(1).head.header
+      val proof = nipopowAlgos.prove(chain)(smallPoPowParams).get
+      val disconnectedProofSuffixTail = proof.suffixTail.updated(proof.suffixTail.length / 2, randomBlock)
+      val disconnectedProof = NipopowProof(nipopowAlgos, proof.m, proof.k, proof.prefix, proof.suffixHead, disconnectedProofSuffixTail, continuous = false)
+      proof.hasValidConnections shouldBe true
+      disconnectedProof.hasValidConnections shouldBe false
+    }
+  }
+
+  property("hasValidConnections - ensures prefix.last & suffix.head are linked") {
+    val prefix = toPoPoWChain(genChain(1))
+    val suffix = toPoPoWChain(genChain(1))
+    NipopowProof(nipopowAlgos, 0, 0, prefix, suffix.head, suffix.tail.map(_.header), continuous = false).hasValidConnections shouldBe false
+  }
+
+}

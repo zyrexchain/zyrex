@@ -1,0 +1,6 @@
+[repositories]
+local
+maven-central: https://repo.maven.apache.org/maven2/
+gitlab-leveldb: https://gitlab.com/api/v4/projects/61211221/packages/maven
+sonatype-releases: https://oss.sonatype.org/content/repositories/releases/
+sbt-plugin-releases: https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases/, [organization]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]

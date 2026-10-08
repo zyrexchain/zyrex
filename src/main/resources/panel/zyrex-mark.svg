@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Zyrex">
+  <rect width="128" height="128" rx="28" fill="#111923"/>
+  <path d="M28 30h74v16L52 82h48v16H26V82l50-36H28z" fill="#71f5be"/>
+  <path d="M94 30h8v16l-8 6z" fill="#ff7768"/>
+</svg>

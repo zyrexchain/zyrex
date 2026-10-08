@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zyrex Mining Pool</title>
+<style>
+body{margin:0;background:#101714;color:#eaf5ee;font:16px system-ui,sans-serif}
+main{max-width:1000px;margin:48px auto;padding:24px}h1{font-size:42px;margin:8px 0}
+a{color:#71f5be}.tag{color:#71f5be;letter-spacing:.15em}code{font-size:16px;word-break:break-all}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin:32px 0}
+.card{background:#1d2923;padding:20px;border-radius:12px}.value{font-size:28px;margin-top:10px}
+small{color:#a8bdb0}table{width:100%;border-collapse:collapse;margin:24px 0}
+th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #31463a}.error{color:#ff7768}
+input{background:#1d2923;color:inherit;border:1px solid #31463a;padding:12px;width:90%;border-radius:8px}
+</style>
+<main><div class="tag" id="network">ZYREX</div><h1>Mining Pool</h1>
+<p><code id="url"></code></p><p id="status">Connecting…</p>
+<div class="grid"><div class="card"><small>Network height</small><div class="value" id="height">—</div></div>
+<div class="card"><small>Connected workers</small><div class="value" id="workers">—</div></div>
+<div class="card"><small>Accepted shares</small><div class="value" id="shares">—</div></div>
+<div class="card"><small>Estimated hashrate</small><div class="value" id="hashrate">—</div></div></div>
+<p>Autolykos v2 · PROP · 0% pool fee · <span id="terms"></span></p>
+<p><small>Miners receive 90% of each block reward; two founder wallets receive 5% each.
+Payout transaction fees are shared by miners. Test coins have no monetary value.
+<span id="gpu-status">GPU verification pending.</span></small></p>
+<h2>Connect your miner</h2><p>Username: <code>ZYREX_ADDRESS.rig_name</code> · password: <code>x</code></p>
+<input id="address" placeholder="Enter your Zyrex wallet address" autocomplete="off">
+<p><code id="command"></code></p>
+<h2>Pool blocks</h2><table><thead><tr><th>Height</th><th>Status</th><th>Reward, ZYRX</th></tr></thead>
+<tbody id="blocks"></tbody></table>
+<h2>Payouts</h2><table><thead><tr><th>Transaction</th><th>Status</th></tr></thead><tbody id="payments"></tbody></table>
+<p id="payment-status"></p><p><small>Updates every 5 seconds. <a href="/api/stats">JSON data</a></small></p></main>
+<script>
+const $=id=>document.getElementById(id);let endpoint='';
+function command(){let a=$('address').value.replace(/[^a-zA-Z0-9]/g,'')||'ZYREX_ADDRESS';
+$('command').textContent=endpoint?`lolMiner --algo AUTOLYKOS2 --pool ${endpoint} --user ${a}.rig1 --pass x`:'';}
+function row(parent,values){let tr=document.createElement('tr');for(let value of values){
+let td=document.createElement('td');td.textContent=value;tr.append(td);}parent.append(tr);}
+async function refresh(){try{let r=await fetch('/api/stats');if(!r.ok)throw Error(r.status);
+let s=await r.json();endpoint=s.stratumUrl;$('url').textContent=endpoint;
+$('network').textContent='ZYREX / '+s.network.toUpperCase();
+$('terms').textContent=`Payouts from ${s.minimumPayoutNano/1e9} ZYRX after ${s.confirmations} confirmations`;
+$('status').textContent=s.halted||(s.ready?'Pool ready for mining':'Waiting for node');
+$('status').className=s.ready&&!s.halted?'':'error';
+$('gpu-status').textContent=s.gpuVerified?
+'GPU verified: '+s.gpuValidation.device+' · '+s.gpuValidation.miner:'GPU verification pending for this network.';
+$('height').textContent=s.nodeHeight;$('workers').textContent=s.connectedWorkers;$('shares').textContent=s.acceptedShares;
+$('hashrate').textContent=(s.estimatedHashrate/1e6).toFixed(2)+' MH/s';
+$('blocks').replaceChildren();
+for(let b of s.blocks.slice(-15).reverse())row($('blocks'),[b.height,b.status,(b.reward/1e9).toFixed(3)]);
+$('payments').replaceChildren();for(let p of s.payouts.slice(-15).reverse())row($('payments'),[p.id,p.status]);command();
+$('payment-status').textContent=s.payoutError?'Payout processing delayed. Your accrued balance is retained.':'';
+}catch(e){$('status').textContent='Pool unavailable';$('status').className='error';}}
+$('address').addEventListener('input',command);refresh();setInterval(refresh,5000);
+</script></html>

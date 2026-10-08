@@ -1,0 +1,48 @@
+# Use with: docker compose -f docker-compose.yml -f docker-compose.pool.yml ...
+services:
+  poolnode:
+    image: zyrex:private
+    restart: unless-stopped
+    command: [--devnet, -c, /etc/zyrex/node.conf]
+    environment:
+      DATADIR: /var/lib/zyrex
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx1500m -XX:ActiveProcessorCount=2
+    ports: ["127.0.0.1:19558:19555"]
+    volumes:
+      - poolnode:/var/lib/zyrex
+      - ./.local/pool/node.conf:/etc/zyrex/node.conf:ro
+    networks:
+      private:
+        ipv4_address: 172.29.95.14
+    healthcheck:
+      test: [CMD, curl, -fsS, --max-time, "5", http://127.0.0.1:19555/info]
+      interval: 5s
+      timeout: 6s
+      retries: 24
+    stop_grace_period: 30s
+  pool:
+    build: ./pool
+    image: zyrex-pool:private
+    restart: unless-stopped
+    user: "${ZYREX_POOL_RUN_UID:-10001}:10001"
+    depends_on:
+      poolnode:
+        condition: service_healthy
+    ports:
+      - "${ZYREX_POOL_BIND_IP:-127.0.0.1}:3333:3333"
+      - "${ZYREX_POOL_BIND_IP:-127.0.0.1}:8088:8088"
+    volumes:
+      - pool:/var/lib/zyrex-pool
+      - ./.local/pool:/etc/zyrex-pool:ro
+    networks:
+      private:
+        ipv4_address: 172.29.95.15
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=5)"]
+      interval: 5s
+      timeout: 6s
+      retries: 24
+    stop_grace_period: 15s
+volumes:
+  poolnode: {}
+  pool: {}

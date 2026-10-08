@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+command -v java >/dev/null || { echo 'Install a JDK (Java 11 recommended).' >&2; exit 1; }
+mkdir -p .tools
+if [[ ! -f .tools/sbt-launch.jar ]]; then
+  curl -fL https://repo.maven.apache.org/maven2/org/scala-sbt/sbt-launch/1.11.1/sbt-launch-1.11.1.jar -o .tools/sbt-launch.jar
+fi
+exec java -Xmx3G -XX:ActiveProcessorCount=4 -Dsbt.override.build.repos=true \
+  -Dsbt.repository.config=project/repositories -jar .tools/sbt-launch.jar "$@"

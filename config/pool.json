@@ -1,0 +1,19 @@
+{
+  "nodeUrl": "http://poolnode:19555",
+  "apiKeyFile": "/etc/zyrex-pool/api-key",
+  "walletFile": "/etc/zyrex-pool/wallet.json",
+  "database": "/var/lib/zyrex-pool/pool.sqlite",
+  "genesisId": "bb994c82d023bf2cf92f88be6f9f997f280b5fb76c3f8dac875f0458dcc51531",
+  "addressPrefix": 80,
+  "stratumPort": 3333,
+  "httpPort": 8088,
+  "publicStratumUrl": "stratum+tcp://127.0.0.1:3333",
+  "allowedNetworks": [
+    "127.0.0.0/8",
+    "172.29.95.0/24"
+  ],
+  "initialShareHashes": 65536,
+  "confirmations": 5,
+  "minimumPayoutNano": 1000000000,
+  "payoutFeeNano": 1000000
+}

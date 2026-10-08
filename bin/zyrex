@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+exec java -Xms128m -Xmx2G -XX:ActiveProcessorCount=4 -jar "$repo/target/scala-2.12/zyrex.jar" "$@"

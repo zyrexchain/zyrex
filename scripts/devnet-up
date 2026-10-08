@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+[[ -f target/scala-2.12/zyrex.jar ]] || scripts/sbt assembly
+docker compose up -d --build --wait
+python3 scripts/private-wallets.py

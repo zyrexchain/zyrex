@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export ZYREX_POOL_RUN_UID="${ZYREX_POOL_RUN_UID:-$(id -u)}"
+[[ "$ZYREX_POOL_RUN_UID" != 0 ]] || export ZYREX_POOL_RUN_UID=10001
+[[ -f target/scala-2.12/zyrex.jar ]] || scripts/sbt assembly
+python3 scripts/pool-prepare.py config
+docker image inspect zyrex:private >/dev/null 2>&1 || docker compose build node1
+docker compose up -d --wait node1 node2 node3
+python3 scripts/private-wallets.py
+docker compose -f docker-compose.yml -f docker-compose.pool.yml up -d --wait poolnode
+python3 scripts/pool-prepare.py wallet
+python3 scripts/pool-prepare.py config
+# Pin the wallet's mining key before exposing Stratum. Recreate to remount the
+# atomically replaced config file; the node data volume is retained.
+docker compose -f docker-compose.yml -f docker-compose.pool.yml up -d --force-recreate --wait poolnode
+python3 scripts/pool-prepare.py wallet
+docker compose -f docker-compose.yml -f docker-compose.pool.yml up -d --build --wait pool
+printf 'Stratum: stratum+tcp://%s:3333\nPool dashboard: http://%s:8088\n' "${ZYREX_POOL_BIND_IP:-127.0.0.1}" "${ZYREX_POOL_BIND_IP:-127.0.0.1}"

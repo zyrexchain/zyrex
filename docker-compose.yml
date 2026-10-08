@@ -1,0 +1,48 @@
+name: zyrex-private
+x-node: &node
+  image: zyrex:private
+  restart: unless-stopped
+  environment:
+    DATADIR: /var/lib/zyrex
+    JAVA_TOOL_OPTIONS: -Xms128m -Xmx1500m -XX:ActiveProcessorCount=2
+  healthcheck:
+    test: [CMD, curl, -fsS, --max-time, "5", http://127.0.0.1:19555/info]
+    interval: 5s
+    timeout: 6s
+    retries: 24
+  stop_grace_period: 30s
+services:
+  node1:
+    <<: *node
+    build: .
+    command: [--devnet, -c, /etc/zyrex/node.conf]
+    ports: ["127.0.0.1:19555:19555"]
+    volumes: ["node1:/var/lib/zyrex", "./config/node1.conf:/etc/zyrex/node.conf:ro"]
+    networks:
+      private:
+        ipv4_address: 172.29.95.11
+  node2:
+    <<: *node
+    command: [--devnet, -c, /etc/zyrex/node.conf]
+    ports: ["127.0.0.1:19556:19555"]
+    volumes: ["node2:/var/lib/zyrex", "./config/node2.conf:/etc/zyrex/node.conf:ro"]
+    networks:
+      private:
+        ipv4_address: 172.29.95.12
+  node3:
+    <<: *node
+    command: [--devnet, -c, /etc/zyrex/node.conf]
+    ports: ["127.0.0.1:19557:19555"]
+    volumes: ["node3:/var/lib/zyrex", "./config/node3.conf:/etc/zyrex/node.conf:ro"]
+    networks:
+      private:
+        ipv4_address: 172.29.95.13
+volumes:
+  node1: {}
+  node2: {}
+  node3: {}
+networks:
+  private:
+    ipam:
+      config:
+        - subnet: 172.29.95.0/24
