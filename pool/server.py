@@ -316,6 +316,8 @@ class Pool:
                     "poolFeePercent": 0, "payoutScheme": "PROP", "gpuVerified": result["gpuValidation"] is not None,
                     "confirmations": self.config["confirmations"], "stratumUrl": self.config["publicStratumUrl"],
                     "minimumPayoutNano": self.config["minimumPayoutNano"],
+                    "payoutFeeNano": self.config["payoutFeeNano"], "feePaidBy": "miners",
+                    "payoutFeePolicy": "actual-transaction-v1",
                     "nodeError": self.error, "payoutError": self.payout_error,
                     "poolAddress": self.node.wallet.get("address")})
                 body = json.dumps(result).encode()
@@ -364,8 +366,26 @@ def validate_config(config):
     delay = config.get("minerRewardDelay", 3)
     if not isinstance(delay, int) or delay < 0 or config["confirmations"] < max(5, delay + 2):
         raise ValueError("Pool confirmations must exceed consensus reward maturity")
-    if config["minimumPayoutNano"] < 1_000_000:
+    minimum = config["minimumPayoutNano"]
+    fee = config.get("payoutFeeNano")
+    if type(minimum) is not int or not 1_000_000 <= minimum <= (1 << 63) - 1:
         raise ValueError("Minimum payout is below the supported transaction amount")
+    if type(fee) is not int or not 0 < fee <= (1 << 63) - 1 or minimum < fee + 1_000_000:
+        raise ValueError("Payout threshold must cover its fee and a supported recipient output")
+    script = config.get("feeScriptHex")
+    if isinstance(script, list):
+        if not script or any(not isinstance(part, str) or not part or len(part) % 2 for part in script):
+            raise ValueError("Native fee script fragments must be nonempty byte-aligned hex strings")
+        script = "".join(script)
+    if not isinstance(script, str) or not script or len(script) % 2 or len(script) > 4096:
+        raise ValueError("Pin the native network transaction fee script")
+    try:
+        decoded = bytes.fromhex(script)
+    except ValueError as error:
+        raise ValueError("Invalid native transaction fee script") from error
+    if decoded.hex() != script:
+        raise ValueError("Native transaction fee script must be canonical lowercase hex")
+    config["feeScriptHex"] = script
 
 
 def main():

@@ -20,7 +20,11 @@ rounds, balances and signed payouts. Consensus assigns 90% of the subsidy to
 miners and 10% to the team before pool distribution.
 
 Balances and share weights use integer units. A largest-remainder allocation
-conserves every nanoZYRX. Payout transaction fees are shared by recipients.
+conserves every nanoZYRX. Each payout deducts one actual network transaction fee
+from its recipients, in proportion to their gross payment amounts. The pool does
+not deduct a fee for every mined block. The website shows each recipient's gross
+debit, fee share and net payment. Unspent legacy fee reserves are refunded once
+through an audited adjustment; historical credits and signed payments are retained.
 Credits require canonical-chain confirmation beyond the configured reward maturity;
 amounts below the minimum payout remain accrued.
 

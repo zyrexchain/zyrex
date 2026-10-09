@@ -5,6 +5,24 @@ import urllib.request
 from pathlib import Path
 
 from pow import address_bytes
+from ledger import allocate_integer, positive_nano
+
+
+def payout_plan(balances, minimum, fee, limit=50):
+    """One actual transaction fee, shared by its recipients in integer units."""
+    positive_nano(minimum)
+    positive_nano(fee)
+    gross = dict((address, positive_nano(amount)) for address, amount in sorted(balances.items())
+                 if amount >= minimum)
+    gross = dict(list(gross.items())[:limit])
+    while gross:
+        charges = allocate_integer(fee, gross)
+        net = {address: amount - charges[address] for address, amount in gross.items()}
+        usable = {address: amount for address, amount in gross.items() if net[address] >= 1_000_000}
+        if usable == gross:
+            return gross, net, charges
+        gross = usable
+    return {}, {}, {}
 
 
 class Node:
@@ -52,6 +70,8 @@ class Node:
         return next((h for h in headers if h["height"] == height), None)
 
     def reconcile(self, ledger, height):
+        if ledger.halted():
+            return
         confirmations = self.config["confirmations"]
         for block in ledger.blocks():
             if block["status"] == "orphaned" or height - block["height"] + 1 < confirmations:
@@ -72,10 +92,14 @@ class Node:
             txs = full["blockTransactions"]["transactions"]
             reward = sum(output["value"] for tx in txs for output in tx["outputs"]
                          if output["ergoTree"] == self.reward_script)
-            ledger.settle(block, header["id"], reward, self.config["payoutFeeNano"])
+            ledger.settle(block, header["id"], reward)
 
         if ledger.halted():
             return
+        # Audit canonical credited blocks before migrating or issuing payments.
+        # Newly settled full-reward rounds contribute zero historical fee reserve.
+        # The server pins genesis and the mining key before reconciliation.
+        ledger.migrate_payout_fees(self.config["feeScriptHex"])
         for payout in ledger.payouts():
             try:
                 tx = self.rpc("/wallet/transactionById?id=" + payout["id"])
@@ -101,19 +125,41 @@ class Node:
                     raise
         if any(p["status"] != "confirmed" for p in ledger.payouts()):
             return
-        amounts = {address: amount for address, amount in ledger.balances().items()
-                   if amount >= self.config["minimumPayoutNano"]}
+        fee = self.config["payoutFeeNano"]
+        gross, amounts, charges = payout_plan(ledger.balances(), self.config["minimumPayoutNano"], fee)
         if not amounts:
             return
-        # One reserved fee per settled round, one output per credited recipient.
-        # Batched transactions cost one fee; unused reserves stay in the pool wallet.
-        amounts = dict(list(amounts.items())[:50])
-        fee = self.config["payoutFeeNano"]
         balance = self.rpc("/wallet/balances")["balance"]
-        if balance < sum(amounts.values()) + fee:
+        if balance < sum(gross.values()):
             return
         tx = self.rpc("/wallet/transaction/generate", {
             "requests": [{"address": a, "value": n} for a, n in amounts.items()], "fee": fee})
-        ledger.prepare_payout(tx, amounts)
+        self.validate_payout(tx, amounts, fee)
+        ledger.prepare_payout(tx, amounts, gross, charges)
         self.rpc("/transactions", tx)
         ledger.payout_status(tx["id"], "broadcast")
+
+    def validate_payout(self, tx, amounts, fee):
+        """Check native signed outputs before reserving any miner's balance."""
+        if not isinstance(tx, dict) or not isinstance(tx.get("id"), str) or not tx["id"] or \
+                not isinstance(tx.get("outputs"), list):
+            raise RuntimeError("Malformed generated payout transaction")
+        outputs = [dict(output) for output in tx["outputs"]]
+        for output in outputs:
+            positive_nano(output.get("value"))
+            if not isinstance(output.get("ergoTree"), str) or output.get("assets", []):
+                raise RuntimeError("Payout contains an unexpected script or token")
+        fee_script = self.config["feeScriptHex"]
+        if sum(output["value"] for output in outputs if output["ergoTree"] == fee_script) != fee:
+            raise RuntimeError("Generated payout has an unexpected native fee")
+        outputs = [output for output in outputs if output["ergoTree"] != fee_script]
+        for address, amount in amounts.items():
+            script = "0008cd" + address_bytes(address)[1:].hex()
+            match = next((output for output in outputs if output["ergoTree"] == script and output["value"] == amount), None)
+            if match is None:
+                raise RuntimeError("Generated payout does not match its recipient amount")
+            outputs.remove(match)
+        pool_address = getattr(self, "wallet", {}).get("address")
+        change_script = "0008cd" + address_bytes(pool_address)[1:].hex() if pool_address else None
+        if len(outputs) > 1 or any(output["ergoTree"] != change_script for output in outputs):
+            raise RuntimeError("Generated payout contains an unexpected recipient")

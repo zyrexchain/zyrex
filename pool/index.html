@@ -9,6 +9,7 @@ a{color:#71f5be}.tag{color:#71f5be;letter-spacing:.15em}code{font-size:16px;word
 .card{background:#1d2923;padding:20px;border-radius:12px}.value{font-size:28px;margin-top:10px}
 small{color:#a8bdb0}table{width:100%;border-collapse:collapse;margin:24px 0}
 th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #31463a}.error{color:#ff7768}
+#payments td:first-child{max-width:230px;word-break:break-all;font:13px monospace}
 input{background:#1d2923;color:inherit;border:1px solid #31463a;padding:12px;width:90%;border-radius:8px}
 </style>
 <main><div class="tag" id="network">ZYREX</div><h1>Mining Pool</h1>
@@ -19,25 +20,46 @@ input{background:#1d2923;color:inherit;border:1px solid #31463a;padding:12px;wid
 <div class="card"><small>Estimated hashrate</small><div class="value" id="hashrate">—</div></div></div>
 <p>Autolykos v2 · PROP · 0% pool fee · <span id="terms"></span></p>
 <p><small>Block reward allocation: 90% miners, 10% team.
-Payout transaction fees are shared by miners. Test coins have no monetary value.
+Each payout deducts one actual network fee from its recipients, in proportion to their gross amounts.
+Test coins have no monetary value.
 <span id="gpu-status">GPU verification pending.</span></small></p>
 <h2>Connect your miner</h2><p>Username: <code>ZYREX_ADDRESS.rig_name</code> · password: <code>x</code></p>
 <input id="address" placeholder="Enter your Zyrex wallet address" autocomplete="off">
 <p><code id="command"></code></p>
+<p id="balance"></p>
 <h2>Pool blocks</h2><table><thead><tr><th>Height</th><th>Status</th><th>Reward, ZYRX</th></tr></thead>
 <tbody id="blocks"></tbody></table>
-<h2>Payouts</h2><table><thead><tr><th>Transaction</th><th>Status</th></tr></thead><tbody id="payments"></tbody></table>
+<h2>Recent payouts</h2><p><small id="payment-note">Enter your address to filter payments.</small></p>
+<table><thead><tr><th>Transaction</th><th>Status</th><th>Gross, ZYRX</th>
+<th>Network fee, ZYRX</th><th>Received, ZYRX</th></tr></thead><tbody id="payments"></tbody></table>
 <p id="payment-status"></p><p><small>Updates every 5 seconds. <a href="/api/stats">JSON data</a></small></p></main>
 <script>
-const $=id=>document.getElementById(id);let endpoint='';
+const $=id=>document.getElementById(id);let endpoint='',stats=null;
+function coins(value){if(value===null||value===undefined)return '—';
+let n=BigInt(value),whole=n/1000000000n,fraction=(n%1000000000n).toString().padStart(9,'0').replace(/0+$/,'');
+return whole.toString()+(fraction?'.'+fraction:'');}
+function amounts(p,key){let exact=p[key+'Exact'];return exact|| (p[key]?JSON.parse(p[key]):null);}
+function total(values,address){if(!values)return null;if(address)return values[address]??null;
+return Object.values(values).reduce((sum,value)=>sum+BigInt(value),0n);}
 function command(){let a=$('address').value.replace(/[^a-zA-Z0-9]/g,'')||'ZYREX_ADDRESS';
-$('command').textContent=endpoint?`lolMiner --algo AUTOLYKOS2 --pool ${endpoint} --user ${a}.rig1 --pass x`:'';}
+$('command').textContent=endpoint?`lolMiner --algo AUTOLYKOS2 --pool ${endpoint} --user ${a}.rig1 --pass x`:'';
+payments();}
 function row(parent,values){let tr=document.createElement('tr');for(let value of values){
 let td=document.createElement('td');td.textContent=value;tr.append(td);}parent.append(tr);}
+function payments(){if(!stats)return;let address=$('address').value.trim();
+let balances=stats.balancesNanoZYRXExact||stats.balancesNanoZYRX;
+$('balance').textContent=address?'Accrued balance: '+coins(balances[address]||'0')+' ZYRX':'';
+$('payments').replaceChildren();let shown=0;
+for(let p of stats.payouts.slice().reverse()){
+let net=total(amounts(p,'amounts'),address);if(net===null)continue;
+row($('payments'),[p.id,p.status,coins(total(amounts(p,'gross'),address)),
+p.fees?coins(total(amounts(p,'fees'),address)):'Prepaid',coins(net)]);if(++shown===15)break;}
+$('payment-note').textContent=address?'Payments to the entered address.':'All recipients combined. Enter your address to filter.';
+$('payment-note').textContent+=' Historical payments show prepaid fees; unused reserves have been refunded.';}
 async function refresh(){try{let r=await fetch('/api/stats');if(!r.ok)throw Error(r.status);
-let s=await r.json();endpoint=s.stratumUrl;$('url').textContent=endpoint;
+let s=await r.json();stats=s;endpoint=s.stratumUrl;$('url').textContent=endpoint;
 $('network').textContent='ZYREX / '+s.network.toUpperCase();
-$('terms').textContent=`Payouts from ${s.minimumPayoutNano/1e9} ZYRX after ${s.confirmations} confirmations`;
+$('terms').textContent=`Payouts from ${coins(s.minimumPayoutNano)} ZYRX after ${s.confirmations} confirmations`;
 $('status').textContent=s.halted||(s.ready?'Pool ready for mining':'Waiting for node');
 $('status').className=s.ready&&!s.halted?'':'error';
 $('gpu-status').textContent=s.gpuVerified?
@@ -46,7 +68,7 @@ $('height').textContent=s.nodeHeight;$('workers').textContent=s.connectedWorkers
 $('hashrate').textContent=(s.estimatedHashrate/1e6).toFixed(2)+' MH/s';
 $('blocks').replaceChildren();
 for(let b of s.blocks.slice(-15).reverse())row($('blocks'),[b.height,b.status,(b.reward/1e9).toFixed(3)]);
-$('payments').replaceChildren();for(let p of s.payouts.slice(-15).reverse())row($('payments'),[p.id,p.status]);command();
+command();
 $('payment-status').textContent=s.payoutError?'Payout processing delayed. Your accrued balance is retained.':'';
 }catch(e){$('status').textContent='Pool unavailable';$('status').className='error';}}
 $('address').addEventListener('input',command);refresh();setInterval(refresh,5000);

@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from ledger import Ledger
-from node import Node
+from ledger import Ledger, allocate_integer
+from node import Node, payout_plan
 from pow import MAX_TARGET, address_bytes, calc_n, hit, validate_miner_address
 from server import Pool, validate_config
 
@@ -21,6 +21,14 @@ ADDRESS2 = "Cz3eBQNXVSVQndNM817Ev6R8zS1Yr3E1sT5Hk1RhhpenT5aSwkCQ"
 MESSAGE = "548c3e602a8f36f8f2738f5f643b02425038044d98543a51cabaa9785e7e864f"
 PK = "0201941e4163eae332959cf06743b28c6b9426772da7faf5a5d5a4ad8e3653595c"
 TESTNET_ADDRESS = "ZRXAcmmjjm7wvmcWVqMSi8R5jcdCRQX99aLPymp1xVLWd8JatTPQV94"
+FEE_SCRIPT = "1001"
+
+
+def payment(txid, amounts, fee):
+    outputs = [{"value": value, "ergoTree": "0008cd" + address_bytes(address)[1:].hex()}
+               for address, value in amounts.items()]
+    outputs.append({"value": fee, "ergoTree": FEE_SCRIPT})
+    return {"id": txid, "outputs": outputs}
 
 
 class PowTests(unittest.TestCase):
@@ -98,12 +106,26 @@ class NodeReadinessTests(unittest.TestCase):
 class ConfigurationTests(unittest.TestCase):
     def test_network_and_reward_maturity_must_match(self):
         valid = {"network": "testnet", "addressPrefix": 64, "minerRewardDelay": 5,
-                 "confirmations": 8, "minimumPayoutNano": 1_000_000_000}
+                 "confirmations": 8, "minimumPayoutNano": 1_000_000_000,
+                 "payoutFeeNano": 1_000_000, "feeScriptHex": FEE_SCRIPT}
         validate_config(valid)
         for update in ({"addressPrefix": 80}, {"network": "mainnet"}, {"confirmations": 5},
-                       {"minimumPayoutNano": 0}, {"minerRewardDelay": -1}):
+                       {"minimumPayoutNano": 0}, {"minerRewardDelay": -1},
+                       {"payoutFeeNano": 0}, {"payoutFeeNano": True}, {"payoutFeeNano": 1_000_000_000},
+                       {"feeScriptHex": ""}, {"feeScriptHex": "10xx"}, {"feeScriptHex": "AA"}):
             with self.assertRaises(ValueError):
                 validate_config(dict(valid, **update))
+
+    def test_native_fee_script_fragments_normalize_and_invalid_pieces_are_rejected(self):
+        valid = {"network": "testnet", "addressPrefix": 64, "minerRewardDelay": 5,
+                 "confirmations": 8, "minimumPayoutNano": 1_000_000_000, "payoutFeeNano": 1_000_000}
+        config = dict(valid, feeScriptHex=["10", "01"])
+        validate_config(config)
+        self.assertEqual(config["feeScriptHex"], FEE_SCRIPT)
+        for fragments in ([], [""], ["10", ""], ["10", None], ["10", 1], [["10"]], [True],
+                          ["1", "001"], ["AA", "01"], ["10", "xx"], ["10", "  "], ["00" * 2049]):
+            with self.assertRaises(ValueError):
+                validate_config(dict(valid, feeScriptHex=fragments))
 
 
 class PreparationTests(unittest.TestCase):
@@ -268,17 +290,23 @@ class AccountingTests(unittest.TestCase):
         block = self.found(ADDRESS1, "a")
         self.ledger.settle(block, "old-canonical", 21, 1)
         node = object.__new__(Node)
-        node.config = {"confirmations": 5}
+        self.ledger.bind_network("genesis", PK)
+        node.config = {"confirmations": 5, "feeScriptHex": FEE_SCRIPT}
         node.header = Mock(return_value={"id": "different", "powSolutions": {"pk": PK, "n": "a"}})
         node.rpc = Mock()
         node.reconcile(self.ledger, 15)
         self.assertIsNotNone(self.ledger.halted())
         node.rpc.assert_not_called()
+        self.assertEqual(self.ledger.balances(), {ADDRESS1: 20})
+        self.assertIsNone(self.ledger.db.execute("SELECT value FROM meta WHERE key='fee_policy'").fetchone())
+        self.assertEqual(self.ledger.db.execute("SELECT COUNT(*) FROM fee_adjustments").fetchone()[0], 0)
 
     def test_confirmations_before_credit_and_crash_after_broadcast(self):
         block = self.found(ADDRESS1, "a")
         node = object.__new__(Node)
-        node.config = {"confirmations": 5, "payoutFeeNano": 1_000_000, "minimumPayoutNano": 1_000_000_000}
+        self.ledger.bind_network("genesis", PK)
+        node.config = {"confirmations": 5, "payoutFeeNano": 1_000_000, "minimumPayoutNano": 1_000_000_000,
+                       "feeScriptHex": FEE_SCRIPT}
         node.reward_script = "reward-script"
         node.header = Mock(return_value={"id": "canonical", "powSolutions": {"pk": PK, "n": "a"}})
         confirmed = False
@@ -292,7 +320,7 @@ class AccountingTests(unittest.TestCase):
             if path == "/wallet/balances":
                 return {"balance": 90_000_000_000}
             if path == "/wallet/transaction/generate":
-                return {"id": "signed-id", "outputs": payload["requests"]}
+                return payment("signed-id", {r["address"]: r["value"] for r in payload["requests"]}, payload["fee"])
             if path == "/transactions":
                 broadcasts.append(payload["id"])
                 if len(broadcasts) == 1:
@@ -313,6 +341,244 @@ class AccountingTests(unittest.TestCase):
         node.reconcile(self.ledger, 16)
         self.assertEqual(self.ledger.payouts()[0]["status"], "confirmed")
         self.assertEqual(len(self.ledger.payouts()), 1)
+
+
+class FeeAccountingTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.folder.name) / "pool.sqlite")
+        self.ledger = Ledger(self.path)
+        self.ledger.bind_network("genesis", PK)
+        self.sequence = 0
+
+    def tearDown(self):
+        self.ledger.db.close()
+        self.folder.cleanup()
+
+    def round(self, reward=90_000_000_000, legacy_fee=0, weights=None):
+        self.sequence += 1
+        weights = weights or {ADDRESS1: 1}
+        for address, weight in weights.items():
+            nonce = str(self.sequence) + address
+            end = self.ledger.share(MESSAGE, nonce, address, "worker", weight)
+        work = {"msg": MESSAGE, "h": self.sequence, "pk": PK}
+        self.ledger.block(work, nonce, end)
+        block = self.ledger.blocks()[-1]
+        self.ledger.settle(block, str(self.sequence), reward, legacy_fee)
+        return block
+
+    def history(self):
+        return {table: [tuple(row) for row in self.ledger.db.execute("SELECT * FROM " + table)]
+                for table in ("credits", "shares", "blocks", "payouts")}
+
+    def test_full_reward_credit_and_only_one_actual_payout_fee(self):
+        self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.round()
+        self.round()
+        self.assertEqual(self.ledger.balances()[ADDRESS1], 180_000_000_000)
+        gross, net, fees = payout_plan(self.ledger.balances(), 1_000_000_000, 1_000_000)
+        self.assertEqual(net[ADDRESS1], 179_999_000_000)
+        self.ledger.prepare_payout(payment("tx", net, 1_000_000), net, gross, fees)
+        self.assertEqual(self.ledger.balances()[ADDRESS1], 0)
+        saved = self.ledger.payouts()[0]
+        self.assertEqual(json.loads(saved["gross"]), gross)
+        self.assertEqual(json.loads(saved["fees"]), {ADDRESS1: 1_000_000})
+        self.assertEqual(sum(net.values()) + sum(fees.values()), 180_000_000_000)
+
+    def test_fee_weighting_rounding_and_large_integer_weights(self):
+        gross = {ADDRESS1: 3_000_000, ADDRESS2: 9_000_000}
+        debits, net, fees = payout_plan(gross, 1_000_000, 7)
+        self.assertEqual(fees, {ADDRESS1: 2, ADDRESS2: 5})
+        self.assertEqual(sum(net.values()) + sum(fees.values()), sum(debits.values()))
+        result = allocate_integer(7, {ADDRESS1: 1 << 100, ADDRESS2: 3 << 100})
+        self.assertEqual(result, fees)
+        self.assertEqual(allocate_integer(1, {"b": 1, "a": 1}), {"b": 0, "a": 1})
+
+    def test_batch_limit_and_below_threshold_balances_are_preserved(self):
+        balances = {str(index).zfill(3): 2_000_000_000 for index in range(60)}
+        balances["below"] = 999_999_999
+        gross, net, fees = payout_plan(balances, 1_000_000_000, 1_000_000)
+        self.assertEqual(len(gross), 50)
+        self.assertEqual(set(gross), {str(index).zfill(3) for index in range(50)})
+        self.assertEqual(sum(fees.values()), 1_000_000)
+        self.assertNotIn("below", net)
+        self.assertEqual(balances["below"], 999_999_999)
+
+    def test_dust_recipient_is_excluded_and_fee_is_reallocated(self):
+        gross, net, fees = payout_plan({ADDRESS1: 1_000_000, ADDRESS2: 2_000_000}, 1_000_000, 1_000_000)
+        self.assertEqual(gross, {ADDRESS2: 2_000_000})
+        self.assertEqual(net, {ADDRESS2: 1_000_000})
+        self.assertEqual(fees, {ADDRESS2: 1_000_000})
+        self.assertEqual(payout_plan({ADDRESS1: 1_000_000}, 1_000_000, 1_000_000), ({}, {}, {}))
+
+    def test_invalid_amounts_and_fee_equations_cannot_change_balances(self):
+        self.round(reward=100)
+        before = self.ledger.balances()
+        for net, gross, fee in ((0, 1, 1), (-1, 1, 2), (True, 2, 1), (1.5, 2, 0.5),
+                                (1, 3, 1), (1, 1, -1), (1, True, 0)):
+            with self.assertRaises(ValueError):
+                self.ledger.prepare_payout({"id": "bad"}, {ADDRESS1: net}, {ADDRESS1: gross}, {ADDRESS1: fee})
+            self.assertEqual(self.ledger.balances(), before)
+            self.assertEqual(self.ledger.payouts(), [])
+        with self.assertRaises(ValueError):
+            self.ledger.prepare_payout({"id": "bad"}, {ADDRESS1: 1}, {ADDRESS2: 1}, {ADDRESS1: 0})
+
+    def test_atomic_rollback_on_partial_insufficiency_and_duplicate_transaction(self):
+        self.round(reward=100, weights={ADDRESS1: 1, ADDRESS2: 1})
+        before = self.ledger.balances()
+        with self.assertRaises(RuntimeError):
+            self.ledger.prepare_payout({"id": "bad"}, {ADDRESS1: 39, ADDRESS2: 59},
+                                       {ADDRESS1: 40, ADDRESS2: 60}, {ADDRESS1: 1, ADDRESS2: 1})
+        self.assertEqual(self.ledger.balances(), before)
+        self.ledger.prepare_payout({"id": "good"}, {ADDRESS1: 9}, {ADDRESS1: 10}, {ADDRESS1: 1})
+        before = self.ledger.balances()
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ledger.prepare_payout({"id": "good"}, {ADDRESS1: 9}, {ADDRESS1: 10}, {ADDRESS1: 1})
+        self.assertEqual(self.ledger.balances(), before)
+        self.assertEqual(len(self.ledger.payouts()), 1)
+
+    def test_prepared_gross_debit_and_fees_survive_restart(self):
+        self.round(reward=3_000_000)
+        gross, net, fees = payout_plan(self.ledger.balances(), 2_000_000, 1_000_000)
+        self.ledger.prepare_payout(payment("saved", net, 1_000_000), net, gross, fees)
+        restarted = Ledger(self.path)
+        try:
+            self.assertEqual(restarted.balances()[ADDRESS1], 0)
+            self.assertEqual(restarted.payouts()[0]["status"], "prepared")
+            self.assertEqual(json.loads(restarted.payouts()[0]["fees"]), fees)
+            self.assertEqual(json.loads(restarted.payouts()[0]["gross"]), gross)
+        finally:
+            restarted.db.close()
+
+    def test_historical_reserve_refund_uses_actual_fee_and_preserves_signed_history(self):
+        self.round(legacy_fee=1_000_000)
+        self.round(legacy_fee=1_000_000)
+        amount = 89_999_000_000
+        self.ledger.prepare_payout(payment("old", {ADDRESS1: amount}, 300_000), {ADDRESS1: amount})
+        before = self.history()
+        audit = self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.assertEqual(audit["reservedNanoZYRX"], 2_000_000)
+        self.assertEqual(audit["spentNanoZYRX"], 300_000)
+        self.assertEqual(audit["refundedNanoZYRX"], 1_700_000)
+        self.assertEqual(self.ledger.balances()[ADDRESS1], 90_000_700_000)
+        self.assertEqual(self.history(), before)
+        self.assertEqual(self.ledger.stats()["feeRefundsNanoZYRX"], {ADDRESS1: 1_700_000})
+        self.assertEqual(self.ledger.migrate_payout_fees(FEE_SCRIPT), audit)
+        self.assertEqual(self.ledger.balances()[ADDRESS1], 90_000_700_000)
+        restarted = Ledger(self.path)
+        try:
+            self.assertEqual(restarted.migrate_payout_fees(FEE_SCRIPT), audit)
+            self.assertEqual(restarted.balances()[ADDRESS1], 90_000_700_000)
+        finally:
+            restarted.db.close()
+
+    def test_refund_weighting_and_all_saved_payout_statuses_reserve_their_actual_fee(self):
+        self.round(legacy_fee=1_000_000, weights={ADDRESS1: 1, ADDRESS2: 3})
+        for index, status in enumerate(("prepared", "broadcast", "confirmed")):
+            txid = str(index)
+            self.ledger.prepare_payout(payment(txid, {ADDRESS1: 1_000_000}, 100_000), {ADDRESS1: 1_000_000})
+            self.ledger.payout_status(txid, status)
+        audit = self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.assertEqual(audit["spentNanoZYRX"], 300_000)
+        self.assertEqual(self.ledger.stats()["feeRefundsNanoZYRX"], {ADDRESS1: 175_000, ADDRESS2: 525_000})
+        self.assertEqual(sum(self.ledger.balances().values()) + 3_000_000 + 300_000, 90_000_000_000)
+
+    def test_migration_requires_network_pin_and_refuses_script_change(self):
+        fresh = Ledger(str(Path(self.folder.name) / "fresh.sqlite"))
+        try:
+            with self.assertRaises(RuntimeError):
+                fresh.migrate_payout_fees(FEE_SCRIPT)
+        finally:
+            fresh.db.close()
+        self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        with self.assertRaises(RuntimeError):
+            self.ledger.migrate_payout_fees("1002")
+
+    def test_halted_pool_preserves_credits_and_cannot_migrate_or_issue_payments(self):
+        self.round(legacy_fee=1_000_000)
+        end = self.ledger.share(MESSAGE, "pending", ADDRESS1, "worker", 1)
+        self.ledger.block({"msg": MESSAGE, "h": 2, "pk": PK}, "pending", end)
+        self.ledger.halt("Operator review required")
+        before, balances = self.history(), self.ledger.balances()
+        node = object.__new__(Node)
+        node.config = {"confirmations": 5, "feeScriptHex": FEE_SCRIPT}
+        node.header, node.rpc = Mock(), Mock()
+        node.reconcile(self.ledger, 100)
+        node.header.assert_not_called()
+        node.rpc.assert_not_called()
+        self.assertEqual(self.history(), before)
+        self.assertEqual(self.ledger.balances(), balances)
+        self.assertIsNone(self.ledger.db.execute("SELECT value FROM meta WHERE key='fee_policy'").fetchone())
+        self.assertEqual(self.ledger.db.execute("SELECT COUNT(*) FROM fee_adjustments").fetchone()[0], 0)
+
+    def test_unknown_negative_or_excess_historical_fee_fails_without_refund(self):
+        self.round(legacy_fee=1_000_000)
+        amounts = {ADDRESS1: 1_000_000}
+        good = payment("old", amounts, 500_000)
+        self.ledger.prepare_payout(good, amounts)
+        before = self.ledger.balances()
+        for raw in (payment("old", amounts, 1_000_001), payment("old", amounts, -1),
+                    dict(good, outputs=good["outputs"][:-1]),
+                    dict(good, outputs=[dict(good["outputs"][0], value=999_999), good["outputs"][1]]),
+                    dict(good, outputs=good["outputs"] + [{"value": 1, "ergoTree": "unknown"}]),
+                    dict(good, outputs=[good["outputs"][0], dict(good["outputs"][1], assets=[{}])])):
+            with self.ledger.db:
+                self.ledger.db.execute("UPDATE payouts SET raw=? WHERE id='old'", (json.dumps(raw),))
+            with self.assertRaises((ValueError, RuntimeError)):
+                self.ledger.migrate_payout_fees(FEE_SCRIPT)
+            self.assertEqual(self.ledger.balances(), before)
+            self.assertIsNone(self.ledger.db.execute("SELECT value FROM meta WHERE key='fee_policy'").fetchone())
+            self.assertEqual(self.ledger.db.execute("SELECT COUNT(*) FROM fee_adjustments").fetchone()[0], 0)
+
+    def test_malformed_legacy_credits_fail_and_journal_collision_rolls_back(self):
+        block = self.round(legacy_fee=1_000_000)
+        with self.ledger.db:
+            self.ledger.db.execute("UPDATE credits SET amount=amount+2 WHERE block=?", (block["id"],))
+        before = self.ledger.balances()
+        with self.assertRaises(RuntimeError):
+            self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.assertEqual(self.ledger.balances(), before)
+        with self.ledger.db:
+            self.ledger.db.execute("UPDATE credits SET amount=amount-2 WHERE block=?", (block["id"],))
+            self.ledger.db.execute("INSERT INTO fee_adjustments VALUES(?,?,?,?)", ("actual-transaction-v1", ADDRESS1, 1, "{}"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.assertEqual(self.ledger.balances(), before)
+        self.assertIsNone(self.ledger.db.execute("SELECT value FROM meta WHERE key='fee_policy'").fetchone())
+
+    def test_negative_legacy_fee_burden_is_refused_instead_of_debiting_a_miner(self):
+        # Hamilton rounding is not monotonic: this historical round needs review.
+        self.round(reward=5, legacy_fee=1, weights={ADDRESS1: 5, ADDRESS2: 3, TESTNET_ADDRESS: 1})
+        before = self.ledger.balances()
+        with self.assertRaises(RuntimeError):
+            self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.assertEqual(self.ledger.balances(), before)
+        self.assertIsNone(self.ledger.db.execute("SELECT value FROM meta WHERE key='fee_policy'").fetchone())
+
+    def test_public_exact_amount_maps_preserve_values_above_javascript_integer_range(self):
+        self.ledger.migrate_payout_fees(FEE_SCRIPT)
+        self.round(reward=(1 << 53) + 7)
+        gross, net, fees = payout_plan(self.ledger.balances(), 1_000_000_000, 1_000_000)
+        self.ledger.prepare_payout(payment("exact", net, 1_000_000), net, gross, fees)
+        stats = self.ledger.stats()
+        self.assertEqual(stats["payouts"][0]["grossExact"][ADDRESS1], str((1 << 53) + 7))
+        self.assertEqual(stats["payouts"][0]["amountsExact"][ADDRESS1], str((1 << 53) + 7 - 1_000_000))
+        self.assertEqual(stats["payouts"][0]["feesExact"][ADDRESS1], "1000000")
+        self.assertEqual(stats["balancesNanoZYRXExact"][ADDRESS1], "0")
+
+    def test_native_generated_payout_cannot_redirect_or_overcharge_miners(self):
+        node = object.__new__(Node)
+        node.config = {"feeScriptHex": FEE_SCRIPT}
+        amounts = {ADDRESS1: 2_000_000}
+        good = payment("new", amounts, 1_000_000)
+        node.validate_payout(good, amounts, 1_000_000)
+        for bad in (payment("new", amounts, 2_000_000), payment("new", {ADDRESS2: 2_000_000}, 1_000_000),
+                    dict(good, outputs=good["outputs"] + [{"value": 1_000_000, "ergoTree": "unknown"}])):
+            with self.assertRaises(RuntimeError):
+                node.validate_payout(bad, amounts, 1_000_000)
+        node.wallet = {"address": ADDRESS2}
+        change = {"value": 3_000_000, "ergoTree": "0008cd" + address_bytes(ADDRESS2)[1:].hex()}
+        node.validate_payout(dict(good, outputs=good["outputs"] + [change]), amounts, 1_000_000)
 
 
 class ProtocolTests(unittest.IsolatedAsyncioTestCase):
