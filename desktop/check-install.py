@@ -39,7 +39,9 @@ def main():
     installer, = (ROOT / 'artifacts/desktop').glob('*' + suffix)
     if windows:
         with tempfile.TemporaryDirectory(prefix='zyrex-installed-') as temporary:
-            install = Path(temporary) / 'Zyrex wallet \u03a9'
+            # The EXE wrapper re-quotes spaced MSI properties. GUI smoke covers
+            # spaces separately; retain a Unicode installation path here.
+            install = Path(temporary) / 'Zyrex\u03a9'
             run([installer, '/qn', '/norestart', 'INSTALLDIR=' + str(install)])
             try:
                 launcher = install / 'Zyrex.exe'

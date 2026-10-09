@@ -21,6 +21,9 @@ MAIN_CLASS = "org.zyrexchain.desktop.DesktopApp"
 NODE_CLASS = "org.zyrexchain.desktop.NodeBootstrap"
 NODE_JAVA_OPTIONS = ("-Xms64m", "-Xmx1024m", "-XX:ActiveProcessorCount=2", "-Dfile.encoding=UTF-8")
 WINDOWS_UPGRADE_ID = "e32dbad8-4673-4c11-a475-c90a5a5962ad"
+ASSEMBLY_NAMESPACE = "urn:schemas-microsoft-com:asm.v1"
+APPLICATION_NAMESPACE = "urn:schemas-microsoft-com:asm.v3"
+CODE_PAGE_NAMESPACE = "http://schemas.microsoft.com/SMI/2019/WindowsSettings"
 
 
 def sha256(path):
@@ -158,6 +161,78 @@ def windows_node_launcher(temporary, staged):
     return ["--add-launcher", "ZyrexNode=" + str(properties)]
 
 
+def windows_manifest_tool():
+    executable = shutil.which("mt.exe")
+    if executable:
+        return regular_file(Path(executable))
+    candidates = []
+    for variable in ("ProgramFiles(x86)", "ProgramFiles"):
+        directory = os.environ.get(variable)
+        if directory:
+            for candidate in (Path(directory) / "Windows Kits/10/bin").glob("*/x64/mt.exe"):
+                version = candidate.parent.parent.name
+                if re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", version) and candidate.is_file():
+                    candidates.append((tuple(map(int, version.split("."))), candidate))
+    if not candidates:
+        raise RuntimeError("Windows packaging requires the Windows 10 or newer SDK manifest tool (mt.exe)")
+    return regular_file(max(candidates, key=lambda item: item[0])[1])
+
+
+def read_windows_manifest(path):
+    if regular_file(path).stat().st_size > 1024 * 1024:
+        raise ValueError("The generated Windows launcher manifest is too large")
+    parser = ElementTree.XMLParser(target=ElementTree.TreeBuilder(insert_comments=True, insert_pis=True))
+    root = ElementTree.fromstring(path.read_bytes(), parser=parser)
+    if root.tag != "{" + ASSEMBLY_NAMESPACE + "}assembly" or root.get("manifestVersion") != "1.0":
+        raise ValueError("The generated Windows launcher has an unexpected manifest root")
+    return root
+
+
+def manifest_signature(element):
+    children = [manifest_signature(child) for child in element if isinstance(child.tag, str)]
+    return element.tag, tuple(sorted(element.attrib.items())), (element.text or "").strip(), tuple(sorted(children))
+
+
+def set_manifest_utf8(root):
+    def single_child(parent, name):
+        children = parent.findall(name)
+        if len(children) > 1:
+            raise ValueError("The generated Windows launcher manifest contains duplicate settings")
+        return children[0] if children else ElementTree.SubElement(parent, name)
+
+    application = single_child(root, "{" + APPLICATION_NAMESPACE + "}application")
+    settings = single_child(application, "{" + APPLICATION_NAMESPACE + "}windowsSettings")
+    tag = "{" + CODE_PAGE_NAMESPACE + "}activeCodePage"
+    existing = [item for item in root.iter() if isinstance(item.tag, str) and item.tag.endswith("}activeCodePage")]
+    if any(item not in list(settings) or item.tag != tag for item in existing) or len(existing) > 1:
+        raise ValueError("The generated Windows launcher has an unexpected active code page setting")
+    code_page = single_child(settings, tag)
+    if code_page.attrib or list(code_page):
+        raise ValueError("The Windows active code page setting must be a simple value")
+    code_page.text = "UTF-8"
+
+
+def enable_windows_utf8(image, temporary):
+    """Set process-local UTF-8 before installer generation or future signing."""
+    executable = windows_manifest_tool()
+    ElementTree.register_namespace("", ASSEMBLY_NAMESPACE)
+    ElementTree.register_namespace("asmv3", APPLICATION_NAMESPACE)
+    ElementTree.register_namespace("ws2019", CODE_PAGE_NAMESPACE)
+    for name in ("Zyrex", "ZyrexNode"):
+        launcher = regular_file(image / (name + ".exe"))
+        manifest = temporary / (name + ".manifest")
+        verified = temporary / (name + ".verified.manifest")
+        run([executable, "-nologo", "-inputresource:" + str(launcher) + ";#1", "-out:" + str(manifest)], timeout=30)
+        root = read_windows_manifest(manifest)
+        set_manifest_utf8(root)
+        ElementTree.ElementTree(root).write(manifest, encoding="utf-8", xml_declaration=True)
+        run([executable, "-nologo", "-manifest", manifest, "-validate_manifest"], timeout=30)
+        run([executable, "-nologo", "-manifest", manifest, "-outputresource:" + str(launcher) + ";#1"], timeout=30)
+        run([executable, "-nologo", "-inputresource:" + str(launcher) + ";#1", "-out:" + str(verified)], timeout=30)
+        if manifest_signature(root) != manifest_signature(read_windows_manifest(verified)):
+            raise ValueError("The embedded Windows launcher manifest did not preserve the requested settings")
+
+
 def portable_archive(image, destination, operating_system):
     if operating_system == "windows":
         with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -246,6 +321,8 @@ def main():
                       "--main-class", MAIN_CLASS, "--runtime-image", args.runtime, "--dest", image_parent,
                       "--icon", args.icon, "--java-options", "-Xms32m", "--java-options", "-Xmx256m",
                       "--java-options", "-Dfile.encoding=UTF-8"] + extra_launchers)
+        if host == "windows":
+            enable_windows_utf8(image, temporary)
         launcher = verify_image(image, host)
         installer_directory = temporary / "installer"
         installer_directory.mkdir()
