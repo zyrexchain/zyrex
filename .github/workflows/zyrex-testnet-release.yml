@@ -31,9 +31,10 @@ jobs:
           'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
           *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
       - name: Preserve native DAA comparison evidence
-        run: >-
-          scripts/sbt
-          'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation artifacts/testnet/daa-verification.json'
+        run: |
+          scripts/sbt 'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation .local/audit-daa/results.json'
+          mkdir -p artifacts/testnet
+          cp .local/audit-daa/results.json artifacts/testnet/daa-verification.json
       - name: Fetch the release verification checkpoint
         run: >-
           python3 scripts/bootstrap-checkpoint.py --source-commit "$GITHUB_SHA"
