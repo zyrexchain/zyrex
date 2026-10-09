@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import zipfile
@@ -35,8 +36,10 @@ def main():
     input_dir = target / 'input'
     input_dir.mkdir(exist_ok=True)
     manifest = target / 'MANIFEST.MF'
+    app_source = ROOT / 'desktop/src/main/java/org/zyrexchain/desktop/DesktopApp.java'
+    version = re.search(r'VERSION = "([0-9]+\.[0-9]+\.[0-9]+-testnet)"', app_source.read_text()).group(1)
     manifest.write_text('Manifest-Version: 1.0\nMain-Class: org.zyrexchain.desktop.DesktopApp\n'
-                        'Class-Path: zyrex.jar\n\n')
+                        'Class-Path: zyrex.jar\nImplementation-Version: ' + version + '\n\n')
     subprocess.run([args.jar, '--create', '--file', str(input_dir / 'desktop.jar'),
                     '--manifest', str(manifest), '-C', str(classes), '.',
                     '-C', str(ROOT / 'desktop/src/main/resources'), '.'], check=True)

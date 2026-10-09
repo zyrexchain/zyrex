@@ -165,7 +165,7 @@ public final class GuiSmoke {
     }
 
     private static Path freshHome(Path root, String name) throws IOException {
-        Path home = root.resolve(name);
+        Path home = root.resolve(name + " wallet \u03a9");
         if (Files.exists(home)) throw new IOException("GUI tests require fresh isolated data directories; existing data is never reset");
         return home;
     }

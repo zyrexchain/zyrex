@@ -45,6 +45,28 @@ def regular_file(path):
     return path
 
 
+def application_version(source, requested=None):
+    with zipfile.ZipFile(regular_file(source / "desktop.jar")) as archive:
+        try:
+            manifest = archive.getinfo("META-INF/MANIFEST.MF")
+        except KeyError as error:
+            raise ValueError("The desktop application manifest is missing") from error
+        if manifest.file_size > 65536:
+            raise ValueError("The desktop application manifest is too large")
+        main = archive.read(manifest).decode("utf-8").replace("\r\n", "\n").split("\n\n", 1)[0]
+    versions = [line.removeprefix("Implementation-Version: ") for line in main.splitlines()
+                if line.startswith("Implementation-Version: ")]
+    numeric = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    if len(versions) != 1 or not re.fullmatch(numeric + "-testnet", versions[0]):
+        raise ValueError("The desktop manifest must declare one numeric testnet Implementation-Version")
+    version = versions[0].removesuffix("-testnet")
+    if any(int(number) > limit for number, limit in zip(version.split("."), (255, 255, 65535))):
+        raise ValueError("The desktop application version exceeds Windows installer version limits")
+    if requested is not None and requested != version:
+        raise ValueError("--version must match the desktop application's manifest version")
+    return versions[0], version
+
+
 def stage_inputs(source, target):
     """Copy only known application payloads, never an arbitrary build directory."""
     target.mkdir()
@@ -123,6 +145,25 @@ def portable_archive(image, destination, operating_system):
             archive.add(image, arcname="Zyrex", filter=public_owner)
 
 
+def prepare_debian_installer(source, destination):
+    """Keep desktop integration working on minimal Ubuntu installations."""
+    with tempfile.TemporaryDirectory(prefix="zyrex-debian-") as temporary:
+        unpacked = Path(temporary) / "package"
+        run(["dpkg-deb", "--raw-extract", source, unpacked])
+        postinst = regular_file(unpacked / "DEBIAN/postinst")
+        script = postinst.read_text(encoding="utf-8")
+        integration = r"(?m)^([ \t]*)xdg-desktop-menu install "
+        if not script.startswith("#!/bin/sh\n") or len(re.findall(integration, script)) != 1:
+            raise ValueError("Unexpected Debian desktop integration script")
+        # xdg-utils can be installed without a desktop environment, leaving this
+        # standard system menu directory absent. Create it during configuration,
+        # before the generated shortcut registration, without hiding its errors.
+        script = re.sub(integration, lambda match: match.group(1)
+                        + "install -d -m 755 /usr/share/desktop-directories\n" + match.group(0), script)
+        postinst.write_text(script, encoding="utf-8")
+        run(["dpkg-deb", "--root-owner-group", "--build", unpacked, destination])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True, help="Directory containing desktop.jar and zyrex.jar")
@@ -131,17 +172,14 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/desktop")
     parser.add_argument("--image-output", type=Path, help="Parent directory for the retained Zyrex application image")
     parser.add_argument("--platform", choices=("auto", "linux", "windows"), default="auto")
-    parser.add_argument("--version", default="0.1.0", help="Three-component numeric application version")
+    parser.add_argument("--version", help="Optional numeric version; must match the desktop JAR manifest")
     parser.add_argument("--icon", type=Path, required=True, help="Linux PNG or Windows ICO icon")
     args = parser.parse_args()
     host = native_platform()
     if args.platform not in ("auto", host):
         parser.error("Native installers must be built on their target operating system")
-    if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
-        parser.error("--version must contain three numeric components")
-    if any(int(number) > limit for number, limit in zip(args.version.split("."), (255, 255, 65535))):
-        parser.error("--version exceeds Windows installer version limits")
     args.input = args.input.resolve(strict=True)
+    release_version, args.version = application_version(args.input, args.version)
     args.runtime = args.runtime.resolve(strict=True)
     args.icon = args.icon.resolve(strict=True)
     if args.icon.suffix.lower() != (".ico" if host == "windows" else ".png"):
@@ -159,7 +197,7 @@ def main():
     image_parent = (args.image_output or ROOT / "desktop/target/package" / f"{host}-amd64").resolve()
     image_parent.mkdir(parents=True, exist_ok=True)
     image = image_parent / "Zyrex"
-    basename = f"zyrex-desktop-{args.version}-testnet-{host}-amd64"
+    basename = f"zyrex-desktop-{release_version}-{host}-amd64"
     archive = args.output / (basename + (".zip" if host == "windows" else ".tar.gz"))
     installer = args.output / (basename + (".exe" if host == "windows" else ".deb"))
     sums = args.output / f"SHA256SUMS-{host}-amd64"
@@ -209,7 +247,10 @@ def main():
         built = list(installer_directory.glob("*.exe" if host == "windows" else "*.deb"))
         if len(built) != 1:
             raise RuntimeError("jpackage did not produce exactly one native installer")
-        shutil.copyfile(built[0], installer)
+        if host == "linux":
+            prepare_debian_installer(built[0], installer)
+        else:
+            shutil.copyfile(built[0], installer)
         portable_archive(image, archive, host)
     with sums.open("x", encoding="utf-8", newline="\n") as output:
         for path in sorted((archive, installer)):
