@@ -4,9 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zyrex Mining Pool</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <style>
 body{margin:0;background:#101714;color:#eaf5ee;font:16px system-ui,sans-serif}
 main{max-width:1000px;margin:48px auto;padding:24px}h1{font-size:42px;margin:8px 0}
+.pool-brand{display:flex;align-items:center;gap:16px}.pool-brand img{width:72px;height:72px;flex:none}
+.brand-heading{min-width:0}.brand-heading h1{overflow-wrap:anywhere}
 a{color:#71f5be}.tag{color:#71f5be;letter-spacing:.15em}code{font-size:16px;word-break:break-all}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin:32px 0}
 .card{background:#1d2923;padding:20px;border-radius:12px}.value{font-size:28px;margin-top:10px;overflow-wrap:anywhere}
@@ -23,15 +26,21 @@ a:focus-visible,input:focus-visible,button:focus-visible{outline:2px solid #eaf5
 .details{display:flex;gap:16px 28px;flex-wrap:wrap}.details p{margin:4px 0}.address-display{overflow-wrap:anywhere}
 [hidden]{display:none!important}#history-status,#account-status,#form-error{min-height:1.3em}
 @media(max-width:600px){main{margin:20px auto;padding:16px}h1{font-size:34px}.address-entry{flex-direction:column}
+.pool-brand{gap:12px}.pool-brand img{width:64px;height:64px}
 .value{font-size:24px}.grid{gap:12px;margin:24px 0}.card{padding:16px}}
 </style>
 </head>
 <body>
 <main>
+<header class="pool-brand">
+<img src="/logo.png" width="72" height="72" alt="Zyrex">
+<div class="brand-heading">
 <div class="tag" id="network">ZYREX</div>
 <h1 id="page-title">Mining Pool</h1>
+</div>
+</header>
 <p id="account-navigation" hidden><a href="/" id="pool-link">Mining pool overview</a> · Public address view</p>
-<p><code id="url"></code></p><p id="status" role="status">Connecting…</p>
+<p>Stratum: <code id="url"></code></p><p id="status" role="status">Connecting…</p>
 <section id="pool-overview" aria-label="Pool overview">
 <div class="grid">
 <div class="card"><small>Network height</small><div class="value" id="height">—</div></div>
@@ -43,9 +52,9 @@ a:focus-visible,input:focus-visible,button:focus-visible{outline:2px solid #eaf5
 <p>Autolykos v2 · PROP · 0% pool fee · <span id="terms"></span></p>
 <p><small>Block reward allocation: 90% miners, 10% team.
 Each payout deducts one actual network fee from its recipients, in proportion to their gross amounts.
-Test coins have no monetary value. <span id="gpu-status">GPU verification pending.</span></small></p>
+Test coins have no monetary value.</small></p>
 <h2 id="address-heading">Connect your miner</h2>
-<p>Username: <code>ZYREX_ADDRESS.rig_name</code> · password: <code>x</code></p>
+<p>Username: <code id="command">ZYREX_ADDRESS.rig1</code> · password: <code>x</code></p>
 <form id="address-form">
 <label for="address">Zyrex wallet address</label>
 <div class="address-entry">
@@ -55,7 +64,6 @@ spellcheck="false" maxlength="2048" required>
 </div>
 <p id="form-error" class="error" role="alert"></p>
 </form>
-<p><code id="command"></code></p>
 <section id="miner-account" aria-labelledby="account-heading" hidden>
 <h2 id="account-heading">Miner account</h2>
 <p class="address-display"><code id="selected-address"></code></p>
@@ -121,7 +129,7 @@ use Refresh history to include newly created payouts.</small></p>
 <th scope="col">Received, ZYRX</th><th scope="col">Gross, ZYRX</th><th scope="col">Network fee, ZYRX</th>
 <th scope="col">Transaction</th></tr></thead><tbody id="payments"></tbody></table></div>
 </section>
-<p id="payment-status"></p><p><small>Updates every 5 seconds. <a href="/api/stats">Pool JSON data</a></small></p>
+<p id="payment-status"></p><p><small>Updates every 5 seconds.</small></p>
 </main>
 <script>
 'use strict';
@@ -196,7 +204,7 @@ async function api(path, signal) {
 function updateCommand() {
   const address = $('address').value.trim();
   const username = /^[1-9A-HJ-NP-Za-km-z]{10,2048}$/.test(address) ? address : 'ZYREX_ADDRESS';
-  $('command').textContent = endpoint ? `lolMiner --algo AUTOLYKOS2 --pool ${endpoint} --user ${username}.rig1 --pass x` : '';
+  $('command').textContent = `${username}.rig1`;
 }
 function payoutTotals(value, label) {
   if (!value || typeof value.count !== 'number') throw new Error('Invalid payout summary');
@@ -384,8 +392,6 @@ async function refreshStats() {
     $('terms').textContent = `Payouts from ${coins(data.minimumPayoutNano)} ZYRX after ${data.confirmations} confirmations`;
     $('status').textContent = data.halted || (data.ready ? 'Pool ready for mining' : 'Waiting for node');
     $('status').className = data.ready && !data.halted ? '' : 'error';
-    $('gpu-status').textContent = data.gpuVerified ?
-      'GPU verified: ' + data.gpuValidation.device + ' · ' + data.gpuValidation.miner : 'GPU verification pending for this network.';
     $('height').textContent = text(data.nodeHeight);
     $('workers').textContent = text(data.connectedWorkers);
     $('shares').textContent = text(data.acceptedShares);

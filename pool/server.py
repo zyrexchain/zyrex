@@ -366,11 +366,12 @@ class Pool:
                     status, body = "503 Service Unavailable", b'{"error":"Accounting is temporarily unavailable"}'
             elif path in ("/api/stats", "/health"):
                 result = await asyncio.to_thread(self.ledger.stats)
+                result.pop("gpuValidation", None)
                 result.update({"coin": "ZYRX", "network": self.config.get("network", "devnet"), "ready": self.ready(),
                     "nodeHeight": self.info["fullHeight"] if self.info else None,
                     "candidateHeight": self.work["h"] if self.work else None,
                     "connectedWorkers": len([c for c in self.clients if c.username]),
-                    "poolFeePercent": 0, "payoutScheme": "PROP", "gpuVerified": result["gpuValidation"] is not None,
+                    "poolFeePercent": 0, "payoutScheme": "PROP",
                     "confirmations": self.config["confirmations"], "stratumUrl": self.config["publicStratumUrl"],
                     "minimumPayoutNano": self.config["minimumPayoutNano"],
                     "payoutFeeNano": self.config["payoutFeeNano"], "feePaidBy": "miners",
@@ -383,6 +384,9 @@ class Pool:
             elif path == "/":
                 body = Path(__file__).with_name("index.html").read_bytes()
                 content_type = "text/html; charset=utf-8"
+            elif path == "/logo.png":
+                body = Path(__file__).with_name("logo.png").read_bytes()
+                content_type = "image/png"
             else:
                 status, body = "404 Not Found", b'{}'
             writer.write((f"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\n"

@@ -112,6 +112,10 @@ server {{
         try_files /index.html =404;
     }}
     location = /favicon.svg {{ try_files /favicon.svg =404; }}
+    location = /logo.png {{
+        limit_except GET HEAD {{ deny all; }}
+        try_files /logo.png =404;
+    }}
     location ~ ^/downloads/(zyrex-cli-linux-(?:amd64|arm64)\\.tar\\.gz|SHA256SUMS)$ {{
         return 302 https://github.com/zyrexchain/zyrex/releases/download/cli-v0.1.0-testnet/$1;
     }}

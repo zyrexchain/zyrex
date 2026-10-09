@@ -257,6 +257,23 @@ class MinerHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(header.startswith("HTTP/1.1 404"))
         self.assertEqual(self.pool.ledger.balances(), {})
 
+    async def test_public_stats_keep_accounting_and_omit_hardware_diagnostics(self):
+        self.pool.config["publicStratumUrl"] = "stratum+tcp://pool.example:3333"
+        self.pool.payout_error = None
+        self.pool.node.wallet = {"address": ADDRESS1}
+        internal = {"acceptedShares": 42, "gpuValidation": {"device": "private fixture"}, "balances": {ADDRESS1: 100}}
+        self.pool.ledger.stats = Mock(side_effect=lambda: dict(internal))
+        for path in ("/api/stats", "/health"):
+            header, body = await self.request(path)
+            self.assertTrue(header.startswith("HTTP/1.1 200"), header)
+            data = json.loads(body)
+            self.assertEqual(data["acceptedShares"], 42)
+            self.assertEqual(data["balances"], {ADDRESS1: 100})
+            self.assertNotIn("gpuValidation", data)
+            self.assertNotIn("gpuVerified", data)
+            self.assertNotIn("private fixture", body.decode())
+        self.assertIn("gpuValidation", internal)
+
     async def test_worker_connections_are_taken_from_actual_authorized_clients(self):
         class Worker:
             def __init__(self, address, name, authorized=True):

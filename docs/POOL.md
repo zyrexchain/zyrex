@@ -52,9 +52,8 @@ Automated tests cover reference PoW vectors, network address isolation,
 actual TCP Stratum messages, rejected shares, exact PROP allocations, orphan
 rounds, maturity constraints and signed-payment recovery.
 
-NVIDIA RTX 4070 Ti mining with lolMiner 1.98a was verified against the private
-network, including accepted blocks, mandatory founder outputs and confirmed
-pool payouts. This does not verify every GPU model or miner implementation.
+Live Stratum mining has been exercised on the test network, including accepted
+blocks, mandatory team outputs and confirmed pool payouts.
 
 ## Protocol provenance
 
