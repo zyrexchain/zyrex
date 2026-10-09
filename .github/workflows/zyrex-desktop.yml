@@ -1,0 +1,124 @@
+name: Zyrex Desktop
+on:
+  push:
+    branches: [main]
+    tags: ['desktop-v*']
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/zyrex-desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/zyrex-desktop.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '11'
+      - run: python3 scripts/check-public-content.py
+      - name: Build the native node
+        run: scripts/sbt assembly
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-node
+          path: target/scala-2.12/zyrex.jar
+          if-no-files-found: error
+          retention-days: 7
+  package:
+    needs: node
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            icon: png
+          - os: windows-2022
+            platform: windows
+            icon: ico
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-node
+          path: target/scala-2.12
+      - name: Compile the application and executable regressions
+        run: python desktop/build.py --tests
+      - name: Verify amounts, recovery, credential isolation and owned process lifecycle
+        run: python desktop/check.py
+      - name: Fetch and verify the bundled native Java 11 runtime
+        run: python desktop/build-runtime.py --platform ${{ matrix.platform }} --output .tools/desktop-runtime
+      - name: Install Linux packaging and display dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot xvfb fontconfig fonts-dejavu-core
+      - name: Verify Windows native installer tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-Command candle.exe, light.exe | Select-Object Name
+      - name: Build native installers and portable bundles
+        run: >-
+          python desktop/package.py --input desktop/target/input
+          --runtime .tools/desktop-runtime --icon desktop/src/main/resources/zyrex-icon.${{ matrix.icon }}
+      - name: Test the real GUI and bundled node
+        run: python desktop/check.py --image desktop/target/package/${{ matrix.platform }}-amd64/Zyrex
+      - name: Verify installation and wallet retention after uninstall
+        run: python desktop/check-install.py --data .local/desktop-gui-data
+      - name: Preserve verified native packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ matrix.platform }}-amd64
+          path: artifacts/desktop/*
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    if: startsWith(github.ref, 'refs/tags/desktop-v') && github.event_name != 'pull_request'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*-amd64
+          merge-multiple: true
+          path: artifacts/desktop
+      - name: Publish the tested desktop application
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          (cd artifacts/desktop && sha256sum --check SHA256SUMS-linux-amd64 && sha256sum --check SHA256SUMS-windows-amd64)
+          cat artifacts/desktop/SHA256SUMS-*-amd64 > artifacts/desktop/SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" artifacts/desktop/* \
+            --verify-tag --draft --prerelease --title "Zyrex Desktop ${GITHUB_REF_NAME#desktop-}" \
+            --notes-file desktop/RELEASE.md
+          gh release edit "$GITHUB_REF_NAME" --draft=false
