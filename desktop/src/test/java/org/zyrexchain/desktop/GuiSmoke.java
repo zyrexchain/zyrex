@@ -3,10 +3,14 @@ package org.zyrexchain.desktop;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.GraphicsEnvironment;
+import java.awt.Insets;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.Robot;
 import java.awt.Window;
 import java.awt.event.WindowEvent;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -73,8 +77,8 @@ public final class GuiSmoke {
             open(createManager);
             await(() -> enabled("create-wallet"), "wallet creation welcome screen");
             click("create-wallet");
-            text("create-password", PASSWORD);
-            text("create-confirmation", PASSWORD);
+            typePassword("create-password", PASSWORD);
+            typePassword("create-confirmation", PASSWORD);
             click("create-submit");
             await(() -> !readText("recovery-phrase").isEmpty(), "native recovery phrase");
             String display = readText("recovery-phrase");
@@ -127,8 +131,11 @@ public final class GuiSmoke {
             await(() -> readLabel("wallet-state").equals("Locked"), "native wallet lock");
             click("unlock-wallet");
             await(() -> componentExists("unlock-password"), "second wallet unlock dialog");
-            text("unlock-password", PASSWORD);
-            click("unlock-submit");
+            typePassword("unlock-password", PASSWORD);
+            capture(output.resolve("unlock.png"));
+            Robot enter = new Robot();
+            enter.keyPress(KeyEvent.VK_ENTER);
+            enter.keyRelease(KeyEvent.VK_ENTER);
             await(() -> readLabel("wallet-state").equals("Unlocked"), "second native wallet unlock");
             selectTab(0);
             capture(output.resolve("overview.png"));
@@ -141,8 +148,8 @@ public final class GuiSmoke {
             await(() -> enabled("restore-wallet"), "wallet restore welcome screen");
             click("restore-wallet");
             text("restore-phrase", new String(ephemeralPhrase));
-            text("restore-password", PASSWORD);
-            text("restore-confirmation", PASSWORD);
+            typePassword("restore-password", PASSWORD);
+            typePassword("restore-confirmation", PASSWORD);
             click("restore-submit");
             await(() -> readLabel("wallet-state").equals("Unlocked"), "native wallet recovery and rescan");
             await(() -> readLabel("network-status").startsWith("Connected"), "restored node synchronization");
@@ -161,6 +168,8 @@ public final class GuiSmoke {
             report.put("backupCloseProtection", true);
             report.put("addressDerivation", true);
             report.put("lockUnlock", true);
+            report.put("passwordKeyboardInput", true);
+            report.put("passwordMaskVisible", true);
             report.put("integerSendValidation", true);
             report.put("nativeInsufficientBalanceRejected", true);
             report.put("guiRestoreSameAddress", true);
@@ -236,6 +245,67 @@ public final class GuiSmoke {
 
     private static void text(String name, String value) throws Exception {
         edt(() -> { ((JTextComponent) component(name)).setText(value); return null; });
+    }
+
+    private static void typePassword(String name, String value) throws Exception {
+        await(() -> componentExists(name), "visible password input");
+        Point point = edt(() -> {
+            JPasswordField field = (JPasswordField) component(name);
+            check(field.isEditable() && field.isEnabled(), "Password input must accept editing");
+            Insets padding = field.getInsets();
+            check(field.getHeight() - padding.top - padding.bottom >= field.getFontMetrics(field.getFont()).getHeight(),
+                "Password input must leave enough height to show its masked characters");
+            Point location = field.getLocationOnScreen();
+            location.translate(field.getWidth() / 2, field.getHeight() / 2);
+            return location;
+        });
+        Robot robot = new Robot();
+        robot.setAutoDelay(20);
+        robot.mouseMove(point.x, point.y);
+        robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+        robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+        await(() -> edtUnchecked(() -> component(name).isFocusOwner()), "password keyboard focus");
+        for (char letter : value.toCharArray()) {
+            int key = KeyEvent.getExtendedKeyCodeForChar(Character.toUpperCase(letter));
+            check(key != KeyEvent.VK_UNDEFINED, "Keyboard test requires a supported character");
+            boolean upper = Character.isUpperCase(letter);
+            if (upper) robot.keyPress(KeyEvent.VK_SHIFT);
+            robot.keyPress(key);
+            robot.keyRelease(key);
+            if (upper) robot.keyRelease(KeyEvent.VK_SHIFT);
+        }
+        robot.waitForIdle();
+        edt(() -> {
+            JPasswordField field = (JPasswordField) component(name);
+            char[] actual = field.getPassword();
+            try {
+                check(Arrays.equals(actual, value.toCharArray()), "Real keyboard input must reach the password document");
+                check(field.echoCharIsSet(), "The entered password must stay masked");
+                BufferedImage masked = render(field);
+                field.setText("");
+                BufferedImage empty = render(field);
+                field.setText(value);
+                Insets padding = field.getInsets();
+                int changed = 0;
+                for (int y = padding.top; y < field.getHeight() - padding.bottom; y++) {
+                    for (int x = padding.left; x < field.getWidth() - padding.right; x++) {
+                        if (masked.getRGB(x, y) != empty.getRGB(x, y)) changed++;
+                    }
+                }
+                check(changed > value.length() * 2, "Typed password must paint visible masking characters inside the field");
+            } finally {
+                Arrays.fill(actual, '\0');
+            }
+            return null;
+        });
+    }
+
+    private static BufferedImage render(JPasswordField field) {
+        BufferedImage pixels = new BufferedImage(field.getWidth(), field.getHeight(), BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D graphics = pixels.createGraphics();
+        try { field.printAll(graphics); }
+        finally { graphics.dispose(); }
+        return pixels;
     }
 
     private static String readText(String name) {

@@ -10,6 +10,7 @@ import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JPasswordField;
 import javax.swing.JTextArea;
 import javax.swing.UIManager;
 import javax.swing.border.Border;
@@ -113,6 +114,25 @@ final class Ui {
     static Border inputBorder() {
         return BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LINE),
             BorderFactory.createEmptyBorder(10, 12, 10, 12));
+    }
+
+    static JPasswordField passwordField(String name, int columns) {
+        JPasswordField field = new JPasswordField(columns);
+        field.setName(name);
+        field.setFont(BODY);
+        field.setForeground(TEXT);
+        field.setCaretColor(TEXT);
+        field.setBackground(SURFACE);
+        field.setEchoChar(BODY.canDisplay('\u2022') ? '\u2022' : '*');
+        field.setBorder(inputBorder());
+        Insets padding = field.getInsets();
+        Dimension preferred = field.getPreferredSize();
+        int height = field.getFontMetrics(field.getFont()).getHeight() + padding.top + padding.bottom + 4;
+        // Keep the echo characters and caret visible inside our padded border.
+        preferred.height = Math.max(preferred.height, height);
+        field.setPreferredSize(preferred);
+        field.setMinimumSize(new Dimension(64, preferred.height));
+        return field;
     }
 
     static void size(Component component, int width, int height) {

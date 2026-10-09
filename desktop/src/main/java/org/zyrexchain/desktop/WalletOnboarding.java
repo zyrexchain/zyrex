@@ -259,10 +259,7 @@ final class WalletOnboarding extends JPanel {
     }
 
     private static JPasswordField password(String name) {
-        JPasswordField field = new JPasswordField(24);
-        field.setName(name);
-        field.setBorder(Ui.inputBorder());
-        return field;
+        return Ui.passwordField(name, 24);
     }
 
     private static JPanel field(String label, Component input) {

@@ -1,5 +1,8 @@
 Zyrex Desktop combines a graphical wallet and a full node in one application.
 
+This update fixes clipped password fields in the unlock, creation and recovery dialogs.
+Keyboard entry, visible masking and Enter-to-unlock are verified with the bundled node.
+
 - Ubuntu 24.04 or newer: Debian installer and portable Linux x86_64 archive.
 - Windows 10 version 1903 or newer / Windows 11 x64: per-user EXE installer and portable ZIP.
 - Java and the node are bundled; the application starts and stops its own node automatically.

@@ -44,6 +44,7 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
@@ -522,10 +523,10 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
         dialog.setName("unlock-dialog");
         JPanel panel = Ui.card();
         panel.setLayout(new BorderLayout(0, 16));
-        panel.add(Ui.paragraph("Enter your wallet password. It stays on this computer."), BorderLayout.NORTH);
-        JPasswordField password = new JPasswordField(26);
-        password.setName("unlock-password");
-        password.setBorder(Ui.inputBorder());
+        JTextArea guidance = Ui.paragraph("Enter your wallet password.\nIt stays on this computer.");
+        guidance.setRows(2);
+        panel.add(guidance, BorderLayout.NORTH);
+        JPasswordField password = Ui.passwordField("unlock-password", 26);
         panel.add(password, BorderLayout.CENTER);
         JButton unlock = Ui.button("Unlock", "unlock-submit", true);
         unlock.addActionListener(event -> {
@@ -543,9 +544,11 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
         dialog.setContentPane(panel);
         dialog.getRootPane().setDefaultButton(unlock);
         dialog.pack();
+        dialog.setMinimumSize(dialog.getSize());
         dialog.setLocationRelativeTo(this);
         dialog.setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         dialog.addWindowListener(new WindowAdapter() {
+            @Override public void windowOpened(WindowEvent event) { password.requestFocusInWindow(); }
             @Override public void windowClosed(WindowEvent event) { password.setText(""); }
         });
         dialog.setVisible(true);
