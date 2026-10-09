@@ -9,6 +9,7 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -212,6 +213,17 @@ def set_manifest_utf8(root):
     code_page.text = "UTF-8"
 
 
+def embed_windows_manifest(executable, manifest, launcher):
+    # jpackage marks its generated Windows launchers read-only after branding.
+    # Change only this owned output while mt.exe updates its manifest resource.
+    permissions = stat.S_IMODE(regular_file(launcher).stat().st_mode)
+    launcher.chmod(permissions | stat.S_IREAD | stat.S_IWRITE)
+    try:
+        run([executable, "-nologo", "-manifest", manifest, "-outputresource:" + str(launcher) + ";#1"], timeout=30)
+    finally:
+        launcher.chmod(permissions)
+
+
 def enable_windows_utf8(image, temporary):
     """Set process-local UTF-8 before installer generation or future signing."""
     executable = windows_manifest_tool()
@@ -227,7 +239,7 @@ def enable_windows_utf8(image, temporary):
         set_manifest_utf8(root)
         ElementTree.ElementTree(root).write(manifest, encoding="utf-8", xml_declaration=True)
         run([executable, "-nologo", "-manifest", manifest, "-validate_manifest"], timeout=30)
-        run([executable, "-nologo", "-manifest", manifest, "-outputresource:" + str(launcher) + ";#1"], timeout=30)
+        embed_windows_manifest(executable, manifest, launcher)
         run([executable, "-nologo", "-inputresource:" + str(launcher) + ";#1", "-out:" + str(verified)], timeout=30)
         if manifest_signature(root) != manifest_signature(read_windows_manifest(verified)):
             raise ValueError("The embedded Windows launcher manifest did not preserve the requested settings")
