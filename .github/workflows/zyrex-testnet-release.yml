@@ -1,0 +1,135 @@
+name: Zyrex testnet alpha release
+on:
+  push:
+    tags: ['testnet-v*']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '11'
+      - name: Check public content and pool, explorer and bootstrap regressions
+        run: |
+          python3 scripts/check-public-content.py
+          python3 -m unittest discover -s pool -p 'test_*.py' -v
+          PYTHONPATH=pool python3 -m unittest discover -s explorer -p 'test_*.py' -v
+          PYTHONPATH=scripts python3 -m unittest -v test_bootstrap
+      - name: Verify native consensus, serialization, PoW and DAA; build the node
+        run: >-
+          scripts/sbt
+          'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification
+          *MessageSerializerSpecification *NetworkControllerSpec'
+          'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
+          *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
+      - name: Preserve native DAA comparison evidence
+        run: >-
+          scripts/sbt
+          'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation artifacts/testnet/daa-verification.json'
+      - name: Fetch the release verification checkpoint
+        run: >-
+          python3 scripts/bootstrap-checkpoint.py --source-commit "$GITHUB_SHA"
+          --output artifacts/testnet/bootstrap-checkpoint.json
+      - name: Verify fresh public synchronization, restart and controlled failed-peer fallback
+        run: >-
+          python3 scripts/bootstrap-smoke.py --source-commit "$GITHUB_SHA"
+          --expected-info artifacts/testnet/bootstrap-checkpoint.json
+          --output artifacts/testnet/bootstrap-verification.json
+      - name: Pin the source and native binary in the release manifest
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, shutil, subprocess
+          from pathlib import Path
+          output = Path('artifacts/testnet')
+          source = subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          if source != os.environ['GITHUB_SHA']:
+              raise ValueError('The release checkout differs from the pinned source')
+          if subprocess.check_output(['git','status','--porcelain'],text=True).strip():
+              raise ValueError('Release source changed during verification')
+          report = json.loads((output/'bootstrap-verification.json').read_text())
+          if not report['success'] or report['sourceCommit'] != source:
+              raise ValueError('Public bootstrap did not verify the release source')
+          if report['sourceBinaryLinkVerified'] is not True:
+              raise ValueError('Release verification did not link a clean source checkout to its native assembly')
+          node = output/'zyrex-node-testnet.jar'
+          shutil.copyfile('target/scala-2.12/zyrex.jar',node)
+          digest = hashlib.sha256(node.read_bytes()).hexdigest()
+          if digest != report['jarSha256']:
+              raise ValueError('The packaged node differs from the bootstrap-tested binary')
+          manifest = {'release':os.environ['GITHUB_REF_NAME'],'sourceCommit':source,
+              'nodeJarSha256':digest,'network':'testnet',
+              'genesisBlockId':report['reference']['genesisBlockId'],
+              'checkpoint':report['reference'],'epochEvidence':report['epochEvidence'],
+              'ingressEvidence':report['ingressEvidence'],
+              'scope':'Experimental alpha; no mainnet or independent-infrastructure readiness claim',
+              'validationScope':'Selected native suites and isolated pool/explorer/bootstrap regressions',
+              'runtime':'Java 11','privateTestnetWorkflowRequired':True}
+          (output/'BUILD.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          shutil.copyfile('docs/RELEASE.md',output/'RELEASE.md')
+          files = sorted(p for p in output.iterdir() if p.is_file() and p.name != 'SHA256SUMS')
+          (output/'SHA256SUMS').write_text(''.join(
+              hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
+          PY
+      - name: Preserve verified release artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: testnet-alpha
+          path: |
+            artifacts/testnet/*.json
+            artifacts/testnet/*.jar
+            artifacts/testnet/RELEASE.md
+            artifacts/testnet/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 30
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: testnet-alpha
+          path: artifacts/testnet
+      - name: Require successful private integration on the same source commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, time
+          endpoint = 'repos/'+os.environ['GH_REPO']+'/actions/workflows/zyrex-private.yml/runs'
+          endpoint += '?head_sha='+os.environ['GITHUB_SHA']+'&event=push&per_page=50'
+          deadline = time.monotonic()+1800
+          while time.monotonic() < deadline:
+              result = json.loads(subprocess.check_output(['gh','api',endpoint],text=True))
+              runs = result['workflow_runs']
+              if any(r['head_sha']==os.environ['GITHUB_SHA'] and r['conclusion']=='success' for r in runs):
+                  break
+              if runs and all(r['status']=='completed' for r in runs):
+                  raise RuntimeError('Private testnet integration did not pass on the release source')
+              time.sleep(15)
+          else:
+              raise RuntimeError('Timed out waiting for release-source private integration')
+          PY
+      - name: Publish the checksum-pinned experimental release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          (cd artifacts/testnet && sha256sum --check SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" artifacts/testnet/* \
+            --verify-tag --draft --prerelease --title "Zyrex Testnet ${GITHUB_REF_NAME#testnet-}" \
+            --notes-file artifacts/testnet/RELEASE.md
+          gh release edit "$GITHUB_REF_NAME" --draft=false

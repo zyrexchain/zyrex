@@ -12,11 +12,12 @@ import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
 
 
-GENESIS = "0f6e2d9181f10231dafa9e1aa3eb297218204e2e2c38f3c65ae0ab367629d336"
+from bootstrap_validation import GENESIS, epoch_evidence, ingress_evidence, sha256_file, source_pin, validate_expected
 HOST = "zyrexchain.com"
 MAX_JSON = 4 * 1024 * 1024
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -33,21 +34,7 @@ def api(port, path, key=None):
 
 
 def pinned_info(path):
-    result = json.loads(path.read_text())
-    if result.get("network") != "testnet" or result.get("genesisBlockId") != GENESIS:
-        raise ValueError("Expected info must pin the Zyrex public testnet genesis")
-    height = result.get("fullHeight")
-    if type(height) is not int or height <= 1 or result.get("headersHeight", 0) < height:
-        raise ValueError("Expected info must include an applied height above genesis")
-    for field, length in (("bestFullHeaderId", 64), ("stateRoot", 66)):
-        value = result.get(field, "")
-        if not isinstance(value, str) or len(value) != length:
-            raise ValueError(f"Expected info has an invalid {field}")
-        try:
-            bytes.fromhex(value)
-        except ValueError as error:
-            raise ValueError(f"Expected info has an invalid {field}") from error
-    return result
+    return validate_expected(json.loads(path.read_text()))
 
 
 def free_port():
@@ -95,9 +82,12 @@ def owned_public_sockets(pid):
     return connections
 
 
-def write_config(run, port, p2p_port, api_port):
+def write_config(run, port, p2p_port, api_port, failed_port=None):
     key = secrets.token_hex(32)
     key_hash = hashlib.blake2b(key.encode(), digest_size=32).hexdigest()
+    peers = [f"{HOST}:{port}"]
+    if failed_port is not None:
+        peers.insert(0, f"127.0.0.1:{failed_port}")
     text = "\n".join([
         f"zyrex.directory = {json.dumps(str(run / 'data'))}",
         "zyrex.node.mining = false",
@@ -112,11 +102,11 @@ def write_config(run, port, p2p_port, api_port):
         f"scorex.logDir = {json.dumps(str(run / 'logs'))}",
         f"scorex.network.nodeName = \"zyrex-bootstrap-check-{port}\"",
         f"scorex.network.bindAddress = \"127.0.0.1:{p2p_port}\"",
-        f"scorex.network.knownPeers = [\"{HOST}:{port}\"]",
+        "scorex.network.knownPeers = " + json.dumps(peers),
         "scorex.network.peerDiscovery = false",
         "scorex.network.upnpEnabled = false",
         "scorex.network.allowLocal = true",
-        "scorex.network.maxConnections = 1",
+        "scorex.network.maxConnections = " + str(2 if failed_port is not None else 1),
         f"scorex.restApi.bindAddress = \"127.0.0.1:{api_port}\"",
         f"scorex.restApi.apiKeyHash = \"{key_hash}\"",
         "",
@@ -155,26 +145,51 @@ def applied_baseline(api_port, expected):
     return info
 
 
-def verify_port(args, expected, port, parent):
+class FailedPeer:
+    """A verification-owned failed endpoint; it never changes a public node or gateway."""
+    def __init__(self):
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(4)
+        self.listener.settimeout(0.1)
+        self.port = self.listener.getsockname()[1]
+        self.accepted = 0
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.run, name="zyrex-bootstrap-failed-peer", daemon=True)
+        self.thread.start()
+
+    def run(self):
+        while not self.stop.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            self.accepted += 1
+            connection.close()
+
+    def close(self):
+        self.stop.set()
+        self.listener.close()
+        self.thread.join(timeout=2)
+
+
+def stop_process(process):
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+
+def phase(args, expected, run, command, environment, api_port, key, resolved, port, name, failed_peer=None):
     started = time.monotonic()
-    run = Path(tempfile.mkdtemp(prefix=f"bootstrap-{port}-", dir=parent))
-    (run / "data").mkdir(mode=0o700)
-    (run / "home").mkdir(mode=0o700)
-    resolved = sorted({normalized_ip(row[4][0]) for row in socket.getaddrinfo(HOST, port, type=socket.SOCK_STREAM)})
-    p2p_port, api_port = free_port(), free_port()
-    while api_port == p2p_port:
-        api_port = free_port()
-    config, key = write_config(run, port, p2p_port, api_port)
-    command = [
-        args.java, "-Xms128m", "-Xmx512m", "-XX:ActiveProcessorCount=2", f"-Duser.home={run / 'home'}",
-        "-jar", str(args.jar), "--testnet", "--config", str(config),
-    ]
-    environment = dict(os.environ)
-    environment.pop("DATADIR", None)
-    result = {"bootstrap": f"{HOST}:{port}", "dnsAddresses": resolved, "freshData": True, "success": False}
     process = None
     try:
-        with (run / "native.log").open("x") as log:
+        with (run / (name + ".log")).open("x") as log:
             process = subprocess.Popen(command, cwd=run, env=environment, stdout=log, stderr=subprocess.STDOUT)
             deadline = started + args.timeout
             last_observed = None
@@ -187,45 +202,77 @@ def verify_port(args, expected, port, parent):
                         connections = owned_public_sockets(process.pid)
                         allowed = [{"remoteIp": address, "remotePort": port} for address in resolved]
                         if any(connection not in allowed for connection in connections):
-                            raise RuntimeError("Verification node connected to an alternative public transport endpoint")
+                            raise RuntimeError("Node connected to an alternative public transport endpoint")
                         peers = api(api_port, "/peers/connected")
                         wallet = api(api_port, "/wallet/status", key)
-                        if connections and peers and wallet.get("isInitialized") is False:
-                            result.update({
-                                "success": True,
-                                "network": info["network"],
-                                "genesisBlockId": info["genesisBlockId"],
-                                "fullHeight": info["fullHeight"],
-                                "headersHeight": info["headersHeight"],
-                                "bestFullHeaderId": info["bestFullHeaderId"],
-                                "stateRoot": info["stateRoot"],
-                                "appliedReferenceHeight": expected["fullHeight"],
-                                "appliedReferenceBlockId": expected["bestFullHeaderId"],
-                                "appliedReferenceStateRoot": expected["stateRoot"],
-                                "transportConnections": connections,
-                                "advertisedPeers": peers,
-                                "walletInitialized": False,
-                                "miningEnabled": False,
-                                "elapsedSeconds": round(time.monotonic() - started, 2),
-                            })
-                            return result
+                        failed_seen = failed_peer is None or failed_peer.accepted > 0
+                        if connections and peers and wallet.get("isInitialized") is False and failed_seen:
+                            return {"success": True, "network": info["network"], "genesisBlockId": info["genesisBlockId"],
+                                    "fullHeight": info["fullHeight"], "headersHeight": info["headersHeight"],
+                                    "bestFullHeaderId": info["bestFullHeaderId"], "stateRoot": info["stateRoot"],
+                                    "appliedReferenceHeight": expected["fullHeight"],
+                                    "appliedReferenceBlockId": expected["bestFullHeaderId"],
+                                    "appliedReferenceStateRoot": expected["stateRoot"],
+                                    "transportConnections": connections, "advertisedPeers": peers,
+                                    "walletInitialized": False, "miningEnabled": False,
+                                    "elapsedSeconds": round(time.monotonic() - started, 2)}
                     last_observed = info
                 except (OSError, ValueError, KeyError, IndexError) as error:
                     last_observed = {"pending": type(error).__name__}
                 time.sleep(1)
-            result["lastObserved"] = last_observed
-            raise RuntimeError("Timed out before native state and the exact public transport endpoint were verified")
-    except Exception as error:
-        result.update({"error": str(error), "elapsedSeconds": round(time.monotonic() - started, 2)})
-        return result
+            raise RuntimeError("Timed out before state, chosen public endpoint and failed-peer observation were verified: "
+                               + json.dumps(last_observed))
     finally:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
+        stop_process(process)
+
+
+def verify_port(args, expected, port, parent, fallback=False):
+    started = time.monotonic()
+    result = {"bootstrap": f"{HOST}:{port}", "freshData": True, "success": False,
+              "kind": "failed-peer-fallback" if fallback else "fresh-sync-and-restart"}
+    failed_peer = None
+    try:
+        run = Path(tempfile.mkdtemp(prefix=f"bootstrap-{port}-", dir=parent))
+        (run / "data").mkdir(mode=0o700)
+        (run / "home").mkdir(mode=0o700)
+        if any((run / "data").iterdir()):
+            raise RuntimeError("Fresh verification requires an empty node data directory")
+        resolved = sorted({normalized_ip(row[4][0]) for row in socket.getaddrinfo(HOST, port, type=socket.SOCK_STREAM)})
+        result["dnsAddresses"] = resolved
+        p2p_port, api_port = free_port(), free_port()
+        while api_port == p2p_port:
+            api_port = free_port()
+        if fallback:
+            failed_peer = FailedPeer()
+        config, key = write_config(run, port, p2p_port, api_port, failed_peer.port if failed_peer else None)
+        command = [args.java, "-Xms128m", "-Xmx512m", "-XX:ActiveProcessorCount=2", f"-Duser.home={run / 'home'}",
+                   "-jar", str(args.jar), "--testnet", "--config", str(config)]
+        environment = dict(os.environ)
+        environment.pop("DATADIR", None)
+        initial = phase(args, expected, run, command, environment, api_port, key, resolved, port, "fresh", failed_peer)
+        result.update(initial)
+        result["success"] = False
+        if fallback:
+            result["fallback"] = {"success": True, "failedPeerAcceptedConnections": failed_peer.accepted,
+                                  "failedPeerBehavior": "Verification-owned loopback peer accepts and closes TCP",
+                                  "remainingBootstrap": f"{HOST}:{port}", "publicGatewayFailureSimulated": False,
+                                  "independentInfrastructureVerified": False}
+        else:
+            if not any((run / "data").rglob("*")):
+                raise RuntimeError("Native synchronization created no persistent node data")
+            restart_reference = {field: initial[field] for field in
+                                 ("network", "genesisBlockId", "fullHeight", "headersHeight", "bestFullHeaderId", "stateRoot")}
+            restart = phase(args, restart_reference, run, command, environment, api_port, key, resolved, port, "restart")
+            restart.update({"dataPreserved": True, "freshData": False, "sameCanonicalReferenceVerified": True})
+            result["restart"] = restart
+        result["success"] = True
+    except Exception as error:
+        result["error"] = str(error)
+    finally:
+        if failed_peer:
+            failed_peer.close()
+        result["elapsedSeconds"] = round(time.monotonic() - started, 2)
+    return result
 
 
 def stop_requested(_signal, _frame):
@@ -238,6 +285,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jar", type=Path, default=Path("target/scala-2.12/zyrex.jar"))
     parser.add_argument("--java", default="java")
+    parser.add_argument("--source-commit", help="Full SHA of the checked-out verification source")
+    parser.add_argument("--min-height", type=int, default=0, help="Optional minimum applied checkpoint height")
     parser.add_argument("--expected-info", type=Path, required=True, help="Public native reference info JSON")
     parser.add_argument("--port", type=int, choices=(19531, 19533), action="append", help="Default: check both independently")
     parser.add_argument("--timeout", type=int, default=180, help="Maximum startup and synchronization seconds per bootstrap")
@@ -248,24 +297,39 @@ def main():
     args.jar = args.jar.resolve(strict=True)
     if shutil.which(args.java) is None:
         parser.error("Java executable is unavailable")
-    expected = pinned_info(args.expected_info)
+    if not 0 <= args.min_height <= (1 << 31) - 1:
+        parser.error("--min-height must be a bounded nonnegative integer")
     args.output = args.output.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     parent = args.output.parent / "runs"
     parent.mkdir(exist_ok=True, mode=0o700)
     if parent.stat().st_mode & 0o077:
         parser.error("Run directory must be accessible only by its owner")
-    digest = hashlib.sha256()
-    with args.jar.open("rb") as jar:
-        for chunk in iter(lambda: jar.read(1024 * 1024), b""):
-            digest.update(chunk)
-    checks = [verify_port(args, expected, port, parent) for port in dict.fromkeys(args.port or (19531, 19533))]
-    report = {
-        "success": all(check["success"] for check in checks), "jarSha256": digest.hexdigest(),
-        "reference": {field: expected[field] for field in
-                      ("network", "genesisBlockId", "fullHeight", "headersHeight", "bestFullHeaderId", "stateRoot")},
-        "checks": checks,
-    }
+    report = {"success": False, "checks": []}
+    try:
+        source, dirty = source_pin(args.source_commit)
+        jar_hash = sha256_file(args.jar)
+        report.update({"sourceCommit": source, "sourceTreeDirty": dirty, "jarSha256": jar_hash,
+                       "sourceBinaryLinkVerified": os.environ.get("GITHUB_ACTIONS") == "true" and not dirty,
+                       "sourceBinaryProvenance": "CI native assembly" if os.environ.get("GITHUB_ACTIONS") == "true"
+                       else "Operator-supplied JAR; source-to-binary correspondence is not independently established"})
+        expected = pinned_info(args.expected_info)
+        if expected.get("verificationSourceCommit", source) != source or expected.get("verificationJarSha256", jar_hash) != jar_hash:
+            raise ValueError("Checkpoint verification source or native binary pin differs")
+        if expected["fullHeight"] < args.min_height:
+            raise ValueError("Checkpoint is below the requested minimum height")
+        report["reference"] = {field: expected[field] for field in
+                               ("network", "genesisBlockId", "fullHeight", "headersHeight", "bestFullHeaderId", "stateRoot")}
+        report["epochEvidence"] = epoch_evidence(expected["fullHeight"])
+        report["minimumHeightGate"] = args.min_height
+        ports = tuple(dict.fromkeys(args.port or (19531, 19533)))
+        for port in ports:
+            report["checks"].append(verify_port(args, expected, port, parent))
+        report["checks"].append(verify_port(args, expected, ports[-1], parent, fallback=True))
+        report["ingressEvidence"] = ingress_evidence(report["checks"])
+        report["success"] = all(check["success"] for check in report["checks"])
+    except Exception as error:
+        report["error"] = str(error)
     with args.output.open("w") as output:
         os.chmod(args.output, 0o600)
         output.write(json.dumps(report, indent=2) + "\n")

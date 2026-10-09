@@ -6,13 +6,16 @@ on:
       - '.github/workflows/zyrex-bootstrap.yml'
       - 'scripts/bootstrap-checkpoint.py'
       - 'scripts/bootstrap-smoke.py'
+      - 'scripts/bootstrap_validation.py'
+      - 'scripts/test_bootstrap.py'
+      - 'src/main/resources/testnet.conf'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   external-sync:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -24,19 +27,43 @@ jobs:
           java-version: '11'
       - name: Check English public content
         run: python3 scripts/check-public-content.py
+      - name: Test checkpoint and verification failure handling
+        run: PYTHONPATH=scripts python3 -m unittest -v test_bootstrap
       - name: Build the native node
         run: scripts/sbt assembly
       - name: Fetch a public testnet checkpoint
-        run: python3 scripts/bootstrap-checkpoint.py --output .local/bootstrap-checkpoint.json
-      - name: Synchronize fresh nodes through each public bootstrap separately
+        run: >-
+          python3 scripts/bootstrap-checkpoint.py
+          --source-commit "$GITHUB_SHA"
+          --output artifacts/bootstrap-checkpoint.json
+      - name: Verify fresh synchronization, preserved-data restart and controlled failed-peer fallback
         run: >-
           python3 scripts/bootstrap-smoke.py
-          --expected-info .local/bootstrap-checkpoint.json
+          --source-commit "$GITHUB_SHA"
+          --expected-info artifacts/bootstrap-checkpoint.json
           --output artifacts/bootstrap-verification.json
+      - name: Record a failed verification when an earlier step prevented execution
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report = Path('artifacts/bootstrap-verification.json')
+          if not report.exists():
+              report.parent.mkdir(parents=True, exist_ok=True)
+              report.write_text(json.dumps({
+                  'success': False, 'sourceCommit': os.environ['GITHUB_SHA'], 'checks': [],
+                  'error': 'Verification did not complete; inspect the preceding workflow steps'
+              }, indent=2) + '\n')
+          PY
       - name: Preserve public verification results
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: public-bootstrap-verification
-          path: artifacts/bootstrap-verification.json
+          path: |
+            artifacts/bootstrap-verification.json
+            artifacts/bootstrap-checkpoint.json
           if-no-files-found: error
           retention-days: 30

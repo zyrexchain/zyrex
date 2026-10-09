@@ -1,11 +1,12 @@
 """Private node RPC and payout reconciliation. No wallet secrets are served to miners."""
 import json
-import urllib.error
 import urllib.request
 from pathlib import Path
 
 from pow import address_bytes
 from ledger import allocate_integer, positive_nano
+from reconciliation import reconcile_chain, retry_payments, verify_payout_tip
+from header_message import header_message
 
 
 def payout_plan(balances, minimum, fee, limit=50):
@@ -67,66 +68,49 @@ class Node:
     def header(self, height):
         # chainSlice follows the best chain; /blocks/at also includes orphan forks.
         headers = self.rpc(f"/blocks/chainSlice?fromHeight={height - 1}&toHeight={height}")
-        return next((h for h in headers if h["height"] == height), None)
+        if not isinstance(headers, list):
+            raise RuntimeError("Malformed canonical chain response")
+        matching = [h for h in headers if isinstance(h, dict) and h.get("height") == height]
+        if len(matching) != 1:
+            return None
+        return matching[0]
+
+    @staticmethod
+    def message(header):
+        return header_message(header)
+
+    def applied_tip(self):
+        """Use current applied state, never a cached height or an unapplied best header."""
+        info = self.rpc("/info")
+        if not isinstance(info, dict) or info.get("genesisBlockId") != self.config["genesisId"] or \
+                info.get("network") != self.config.get("network", "devnet"):
+            raise RuntimeError("Pool RPC chain identity is unavailable or changed")
+        height = info.get("fullHeight")
+        block_id = info.get("bestFullHeaderId")
+        if type(height) is not int or height < 1 or height != info.get("headersHeight") or \
+                not isinstance(block_id, str) or not block_id or block_id != info.get("bestHeaderId"):
+            raise RuntimeError("Pool node has no synchronized applied tip; payouts are paused")
+        header = self.header(height)
+        if not isinstance(header, dict) or header.get("id") != block_id:
+            raise RuntimeError("Applied tip and canonical header disagree; payouts are paused")
+        return height, block_id
 
     def reconcile(self, ledger, height):
         if ledger.halted():
             return
-        confirmations = self.config["confirmations"]
-        for block in ledger.blocks():
-            if block["status"] == "orphaned" or height - block["height"] + 1 < confirmations:
-                continue
-            header = self.header(block["height"])
-            matches = header and header["powSolutions"]["pk"] == block["pk"] and header["powSolutions"]["n"] == block["nonce"]
-            if block["status"] == "confirmed":
-                if not matches or header["id"] != block["hash"]:
-                    ledger.halt("A credited block was reorganized. Review balances before resuming payouts.")
-                    return
-                continue
-            if not header:
-                break
-            if not matches:
-                ledger.orphan(block["id"])
-                continue
-            full = self.rpc("/blocks/" + header["id"])
-            txs = full["blockTransactions"]["transactions"]
-            reward = sum(output["value"] for tx in txs for output in tx["outputs"]
-                         if output["ergoTree"] == self.reward_script)
-            ledger.settle(block, header["id"], reward)
-
-        if ledger.halted():
+        height, _ = self.applied_tip()
+        if not reconcile_chain(self, ledger, height) or ledger.halted():
             return
         # Audit canonical credited blocks before migrating or issuing payments.
         # Newly settled full-reward rounds contribute zero historical fee reserve.
         # The server pins genesis and the mining key before reconciliation.
         ledger.migrate_payout_fees(self.config["feeScriptHex"])
-        for payout in ledger.payouts():
-            try:
-                tx = self.rpc("/wallet/transactionById?id=" + payout["id"])
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise
-                tx = None
-            if tx and tx.get("numConfirmations", 0) >= confirmations:
-                ledger.payout_status(payout["id"], "confirmed")
-                continue
-            if tx and tx.get("numConfirmations", 0) > 0:
-                ledger.payout_status(payout["id"], "broadcast")
-                continue
-            if payout["status"] == "confirmed":
-                ledger.payout_status(payout["id"], "broadcast")
-            try:
-                self.rpc("/transactions", json.loads(payout["raw"]))
-                ledger.payout_status(payout["id"], "broadcast")
-            except urllib.error.HTTPError as error:
-                # Keep the reservation and signed transaction on every ambiguous response.
-                # A tx already in the mempool is not a reason to create another payment.
-                if error.code != 400:
-                    raise
-        if any(p["status"] != "confirmed" for p in ledger.payouts()):
+        verify_payout_tip(self, ledger)
+        if not retry_payments(self, ledger):
             return
         fee = self.config["payoutFeeNano"]
-        gross, amounts, charges = payout_plan(ledger.balances(), self.config["minimumPayoutNano"], fee)
+        gross, amounts, charges = payout_plan(ledger.payable_balances(self.config["minimumPayoutNano"]),
+                                              self.config["minimumPayoutNano"], fee)
         if not amounts:
             return
         balance = self.rpc("/wallet/balances")["balance"]
@@ -135,6 +119,7 @@ class Node:
         tx = self.rpc("/wallet/transaction/generate", {
             "requests": [{"address": a, "value": n} for a, n in amounts.items()], "fee": fee})
         self.validate_payout(tx, amounts, fee)
+        verify_payout_tip(self, ledger)
         ledger.prepare_payout(tx, amounts, gross, charges)
         self.rpc("/transactions", tx)
         ledger.payout_status(tx["id"], "broadcast")

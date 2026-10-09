@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlsplit
 from ledger import Ledger
 from node import Node
 from pow import DIFF1, MAX_TARGET, hit, validate_miner_address
+from resource_limits import Admission, DuplicateCache, ResourceBusy, TokenBucket, WorkLane, networks, proxy_identity, trusted
 
 LOG = logging.getLogger("zyrex-pool")
 
@@ -29,7 +30,7 @@ class StratumError(Exception):
 
 
 class Client:
-    def __init__(self, pool, reader, writer, prefix):
+    def __init__(self, pool, reader, writer, prefix, identity=None):
         self.pool, self.reader, self.writer = pool, reader, writer
         self.prefix = prefix
         self.subscribed = False
@@ -47,6 +48,12 @@ class Client:
         self.invalid_requests = 0
         self.last_send = 0
         self.static_difficulty = None
+        self.identity = identity or writer.get_extra_info("peername")[0]
+        self.active = False
+        limits = pool.resources.limits
+        self.handshake_end = time.monotonic() + limits["handshakeSeconds"]
+        self.request_budget = TokenBucket(limits["requestRate"], limits["requestBurst"])
+        self.share_budget = TokenBucket(limits["shareRate"], limits["shareBurst"])
 
     async def send(self, message):
         async with self.write_lock:
@@ -74,6 +81,12 @@ class Client:
         await self.notify("mining.notify", [job_id, work["h"], work["msg"], "", "", 4, str(target), "", clean])
         self.last_send = time.monotonic()
 
+    def activate(self):
+        if not self.active and self.subscribed and self.username:
+            if not self.pool.resources.activate(self.identity):
+                raise StratumError(26, "Active connection limit reached")
+            self.active = True
+
     async def request(self, request):
         if not isinstance(request, dict) or "id" not in request:
             raise StratumError(20, "Invalid JSON-RPC request")
@@ -85,6 +98,7 @@ class Client:
             if self.subscribed:
                 raise StratumError(20, "Already subscribed")
             self.subscribed = True
+            self.activate()
             await self.response(ident, [[["mining.set_difficulty", self.prefix],
                                           ["mining.notify", self.prefix]], self.prefix, 6])
             await self.job(True)
@@ -115,6 +129,7 @@ class Client:
                 self.hashes = hashes
                 self.static_difficulty = difficulty
             self.username, self.address, self.worker = params[0], address, worker
+            self.activate()
             await self.response(ident, True)
             LOG.info("Authorized %s", self.username)
             await self.job(True)
@@ -130,6 +145,9 @@ class Client:
             raise StratumError(20, "Unsupported method")
 
     async def submit(self, ident, params):
+        if not self.share_budget.take():
+            self.pool.resources.denied_shares += 1
+            raise StratumError(26, "Share request budget exceeded")
         if not self.subscribed:
             raise StratumError(25, "Not subscribed")
         if not self.username or not params or params[0] != self.username:
@@ -146,30 +164,47 @@ class Client:
             raise StratumError(20, "Nonce must contain the assigned extranonce1 and be 8 bytes")
         # Miningcore miners send the full nonce as the fifth parameter. The second
         # extranonce and ntime fields are placeholders, as required by the compatible mining wire format.
-        score = await asyncio.to_thread(hit, bytes.fromhex(work["msg"]), bytes.fromhex(nonce_hex), work["h"])
+        key = (work["msg"], nonce_hex)
+        if not self.pool.duplicates.reserve(key):
+            raise StratumError(22, "Duplicate share")
+        try:
+            # Durable uniqueness catches retries after cache expiry and process restarts.
+            if await self.pool.lanes["pow"].run(self.pool.ledger.share_exists, *key):
+                raise StratumError(22, "Duplicate share")
+            score = await self.pool.lanes["pow"].run(hit, bytes.fromhex(work["msg"]), bytes.fromhex(nonce_hex), work["h"])
+        except ResourceBusy as error:
+            self.pool.duplicates.release(key)
+            raise StratumError(26, "Verification queue is full; reconnect later") from error
+        except sqlite3.Error as error:
+            self.pool.duplicates.release(key)
+            raise StratumError(26, "Accounting is temporarily unavailable") from error
         if score >= target:
             raise StratumError(23, "Low difficulty share")
         if not self.pool.ready() or work["h"] != self.pool.work["h"] or work["h"] <= self.pool.solved_height:
             raise StratumError(21, "Stale job height")
         try:
-            share_id = self.pool.ledger.share(work["msg"], nonce_hex, self.address, self.worker, weight)
+            await self.pool.lanes["writes"].run(
+                self.pool.record_share, work, nonce_hex, self.address, self.worker, weight, score < work["b"])
         except sqlite3.IntegrityError as error:
             raise StratumError(22, "Duplicate share") from error
+        except ResourceBusy as error:
+            self.pool.duplicates.release(key)
+            raise StratumError(26, "Accounting queue is full; reconnect later") from error
         self.accepted += 1
         now = time.monotonic()
-        if self.last_share is not None:
+        if self.last_share is not None and self.static_difficulty is None:
             self.intervals.append(now - self.last_share)
         self.last_share = now
         # A durable submission record also covers an RPC timeout after the node accepted.
         if score < work["b"]:
-            self.pool.ledger.block(work, nonce_hex, share_id)
             try:
                 async with self.pool.submit_lock:
-                    await asyncio.to_thread(self.pool.node.rpc, "/mining/solution", {"n": nonce_hex, "pk": work["pk"]})
+                    await self.pool.lanes["solutions"].run(
+                        self.pool.node.rpc, "/mining/solution", {"n": nonce_hex, "pk": work["pk"]})
                     self.pool.solved_height = max(self.pool.solved_height, work["h"])
                 LOG.info("Block submitted: height=%s worker=%s nonce=%s", work["h"], self.username, nonce_hex)
                 self.pool.refresh.set()
-            except (OSError, ValueError, TimeoutError) as error:
+            except (OSError, ValueError, TimeoutError, ResourceBusy) as error:
                 LOG.warning("Block RPC response uncertain at height %s: %s", work["h"], type(error).__name__)
         await self.response(ident, True)
         if self.static_difficulty is None and now - self.last_retarget >= 30 and len(self.intervals) >= 4:
@@ -184,8 +219,15 @@ class Client:
     async def run(self):
         try:
             while True:
-                line = await asyncio.wait_for(self.reader.readline(), 600)
-                if not line:
+                timeout = self.pool.resources.limits["idleSeconds"] if self.active else self.handshake_end - time.monotonic()
+                if timeout <= 0:
+                    break
+                line = await asyncio.wait_for(self.reader.readline(), timeout)
+                if not line or line.startswith(b"PROXY "):
+                    break
+                if not self.request_budget.take():
+                    self.pool.resources.denied_requests += 1
+                    await self.response(None, False, [26, "Request budget exceeded", None])
                     break
                 request = None
                 try:
@@ -201,14 +243,18 @@ class Client:
                     # block. Duplicate retries can also follow a lost response.
                     if code not in (21, 22):
                         self.invalid_requests += 1
-                    if self.invalid_requests >= 50 and self.invalid_requests > self.accepted:
+                    if code == 26 or self.invalid_requests >= 50 and self.invalid_requests > self.accepted:
                         break
         except (ConnectionError, OSError, asyncio.TimeoutError, ValueError):
             pass
         finally:
             self.pool.clients.discard(self)
+            self.pool.resources.drop(self.pool.resources.active if self.active else self.pool.resources.pending, self.identity)
             self.writer.close()
-            await self.writer.wait_closed()
+            try:
+                await asyncio.wait_for(self.writer.wait_closed(), 2)
+            except (OSError, asyncio.TimeoutError):
+                pass
 
 
 class Pool:
@@ -229,6 +275,38 @@ class Pool:
         self.last_reconcile = 0
         self.reconcile_task = None
         self.solved_height = 0
+        self.ensure_resources()
+
+    def ensure_resources(self):
+        # Lazy initialization also keeps protocol tests independent of node/wallet credentials.
+        if hasattr(self, "resources"):
+            return
+        self.resources = Admission(self.config)
+        limits = self.resources.limits
+        self.duplicates = DuplicateCache(limits["duplicateEntries"], limits["duplicateSeconds"])
+        self.lanes = {"pow": WorkLane("pow", limits["powWorkers"], limits["powQueue"]),
+                      "http": WorkLane("http", limits["httpWorkers"], limits["httpQueue"]),
+                      "maintenance": WorkLane("maintenance", 1, 0), "templates": WorkLane("templates", 1, 0),
+                      "solutions": WorkLane("solutions", 1, 0), "writes": WorkLane("writes", 1, 8)}
+        self.proxy_networks = networks(self.config, "trustedProxyNetworks")
+        self.http_proxy_networks = networks(self.config, "httpTrustedProxyNetworks")
+        if self.config.get("stratumProxyProtocol") and not self.proxy_networks:
+            raise ValueError("PROXY protocol requires pinned trusted transport networks")
+        self.proxy_pending = 0
+
+    def resource_stats(self):
+        result = self.resources.stats()
+        result["proxyHeadersPending"] = self.proxy_pending
+        result["duplicateCacheEntries"] = len(self.duplicates.entries)
+        result["duplicateCacheRejected"] = self.duplicates.rejected
+        result["queues"] = {name: lane.stats() for name, lane in self.lanes.items()}
+        return result
+
+    def record_share(self, work, nonce, address, worker, weight, solution):
+        ident = self.ledger.share(work["msg"], nonce, address, worker, weight)
+        if solution:
+            self.ledger.block(work, nonce, ident)
+        return ident
 
     def ready(self):
         return self.work is not None and self.error is None and time.monotonic() - self.checked_at < 15
@@ -238,19 +316,44 @@ class Pool:
         return peer and any(ipaddress.ip_address(peer[0]) in net for net in self.allowed)
 
     async def accept(self, reader, writer):
-        if not self.permitted(writer) or len(self.clients) >= 64:
+        self.ensure_resources()
+        admitted = False
+        identity = writer.get_extra_info("peername")[0]
+        try:
+            if not self.permitted(writer):
+                return
+            if self.config.get("stratumProxyProtocol"):
+                if not trusted(identity, self.proxy_networks) or self.proxy_pending >= self.resources.limits["pendingConnections"]:
+                    return
+                self.proxy_pending += 1
+                try:
+                    header = await asyncio.wait_for(reader.readuntil(b"\r\n"), self.resources.limits["proxyHeaderSeconds"])
+                    identity = proxy_identity(header)
+                finally:
+                    self.proxy_pending -= 1
+            if not self.resources.connect(identity):
+                return
+            admitted = True
+            active = {c.prefix for c in self.clients}
+            while True:
+                self.extra_nonce = (self.extra_nonce + 1) % 65536
+                prefix = f"{self.extra_nonce:04x}"
+                if prefix not in active:
+                    break
+            client = Client(self, reader, writer, prefix, identity)
+            self.clients.add(client)
+            admitted = False  # Client.run owns the admission counter after this point.
+            await client.run()
+        except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            pass
+        finally:
+            if admitted:
+                self.resources.drop(self.resources.pending, identity)
             writer.close()
-            await writer.wait_closed()
-            return
-        active = {c.prefix for c in self.clients}
-        while True:
-            self.extra_nonce = (self.extra_nonce + 1) % 65536
-            prefix = f"{self.extra_nonce:04x}"
-            if prefix not in active:
-                break
-        client = Client(self, reader, writer, prefix)
-        self.clients.add(client)
-        await client.run()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), 2)
+            except (OSError, asyncio.TimeoutError):
+                pass
 
     async def broadcast(self, clean):
         results = await asyncio.gather(*(c.job(clean) for c in tuple(self.clients)), return_exceptions=True)
@@ -262,10 +365,10 @@ class Pool:
         while True:
             try:
                 if time.monotonic() - self.checked_at >= 5 or self.info is None:
-                    self.info = await asyncio.to_thread(self.node.ready)
-                    self.ledger.bind_network(self.config["genesisId"], self.node.pk)
+                    self.info = await self.lanes["templates"].run(self.node.ready)
+                    await self.lanes["writes"].run(self.ledger.bind_network, self.config["genesisId"], self.node.pk)
                     self.checked_at = time.monotonic()
-                work = await asyncio.to_thread(self.node.rpc, "/mining/candidate")
+                work = await self.lanes["templates"].run(self.node.rpc, "/mining/candidate")
                 work["b"] = int(work["b"])
                 if work["pk"] != self.node.pk or len(bytes.fromhex(work["msg"])) != 32 or not 0 < work["b"] <= MAX_TARGET:
                     raise ValueError("Invalid node work template")
@@ -293,8 +396,9 @@ class Pool:
 
     async def reconcile(self, height):
         # Wallet/history RPCs must not delay job updates or PoW submissions.
+        self.ensure_resources()
         try:
-            await asyncio.to_thread(self.node.reconcile, self.ledger, height)
+            await self.lanes["maintenance"].run(self.node.reconcile, self.ledger, height)
             self.payout_error = None
         except Exception as error:
             self.payout_error = type(error).__name__ + ": " + str(error)
@@ -322,7 +426,7 @@ class Pool:
                 if not re.fullmatch(r"0|[1-9][0-9]{0,18}", value):
                     raise ValueError("Pagination parameters must be bounded nonnegative integers")
                 values[name] = int(value)
-            return await asyncio.to_thread(self.ledger.miner_payouts, address,
+            return await self.lanes["http"].run(self.ledger.miner_payouts, address,
                                            values.get("limit", 20), values.get("offset", 0),
                                            values.get("snapshot"), confirmations)
         if query:
@@ -331,7 +435,7 @@ class Pool:
         for client in tuple(self.clients):
             if client.username and client.address == address:
                 connected[client.worker] = connected.get(client.worker, 0) + 1
-        result = await asyncio.to_thread(self.ledger.miner_summary, address, connected, confirmations)
+        result = await self.lanes["http"].run(self.ledger.miner_summary, address, connected, confirmations)
         result.update({"coin": "ZYRX", "network": self.config.get("network", "devnet"), "ready": self.ready(),
                        "nodeHeight": self.info["fullHeight"] if self.info else None,
                        "confirmations": confirmations, "payoutScheme": "PROP", "poolFeePercent": 0,
@@ -341,10 +445,33 @@ class Pool:
         return result
 
     async def http(self, reader, writer):
+        self.ensure_resources()
+        identity = writer.get_extra_info("peername")[0]
+        counted = False
+        admitted = False
         try:
+            if self.resources.header_connections >= self.resources.limits["httpConnections"]:
+                self.resources.denied_http += 1
+                await self.http_busy(writer)
+                return
+            self.resources.header_connections += 1
+            counted = True
             if not self.permitted(writer):
                 return
-            header = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+            header = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)
+            forwarded = []
+            for field in header.decode("ascii").split("\r\n")[1:]:
+                name, separator, value = field.partition(":")
+                if separator and name.lower() == "x-zyrex-client-ip":
+                    forwarded.append(value.strip())
+            if forwarded:
+                if len(forwarded) != 1 or not trusted(identity, self.http_proxy_networks):
+                    raise ValueError("Untrusted client identity header")
+                identity = str(ipaddress.ip_address(forwarded[0]))
+            if not self.resources.admit_http(identity):
+                await self.http_busy(writer)
+                return
+            admitted = True
             first = header.decode("ascii").split("\r\n")[0].split(" ")
             valid_request = len(first) == 3 and first[2] in ("HTTP/1.0", "HTTP/1.1")
             method = first[0] if valid_request else ""
@@ -362,11 +489,15 @@ class Pool:
                         status, body = "503 Service Unavailable", b'{"error":"Miner response exceeds its size limit"}'
                 except ValueError as error:
                     status, body = "400 Bad Request", json.dumps({"error": str(error)}).encode()
-                except sqlite3.Error:
+                except (sqlite3.Error, ResourceBusy):
                     status, body = "503 Service Unavailable", b'{"error":"Accounting is temporarily unavailable"}'
             elif path in ("/api/stats", "/health"):
-                result = await asyncio.to_thread(self.ledger.stats)
+                result = await self.lanes["http"].run(self.ledger.stats)
                 result.pop("gpuValidation", None)
+                result["payouts"] = [{name: value for name, value in payout.items()
+                                      if name not in ("amounts", "gross", "fees")}
+                                     for payout in result.get("payouts", [])[-10:]]
+                result["recentPayoutLimit"] = 10
                 result.update({"coin": "ZYRX", "network": self.config.get("network", "devnet"), "ready": self.ready(),
                     "nodeHeight": self.info["fullHeight"] if self.info else None,
                     "candidateHeight": self.work["h"] if self.work else None,
@@ -377,7 +508,7 @@ class Pool:
                     "payoutFeeNano": self.config["payoutFeeNano"], "feePaidBy": "miners",
                     "payoutFeePolicy": "actual-transaction-v1",
                     "nodeError": self.error, "payoutError": self.payout_error,
-                    "poolAddress": self.node.wallet.get("address")})
+                    "poolAddress": self.node.wallet.get("address"), "resources": self.resource_stats()})
                 body = json.dumps(result).encode()
                 if path == "/health" and not self.ready():
                     status = "503 Service Unavailable"
@@ -389,15 +520,37 @@ class Pool:
                 content_type = "image/png"
             else:
                 status, body = "404 Not Found", b'{}'
+            if len(body) > 262144:
+                status, content_type = "503 Service Unavailable", "application/json"
+                body = b'{"error":"Pool response exceeds its size limit"}'
             writer.write((f"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\n"
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nAllow: GET, HEAD\r\n"
                           "Connection: close\r\n\r\n").encode() + (body if method != "HEAD" else b""))
             await asyncio.wait_for(writer.drain(), 5)
+        except (sqlite3.Error, ResourceBusy):
+            await self.http_busy(writer)
         except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
             pass
         finally:
+            if admitted:
+                self.resources.drop(self.resources.http, identity)
+            if counted:
+                self.resources.header_connections -= 1
             writer.close()
-            await writer.wait_closed()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), 2)
+            except (OSError, asyncio.TimeoutError):
+                pass
+
+    @staticmethod
+    async def http_busy(writer):
+        body = b'{"error":"Pool request capacity exceeded; retry later"}'
+        writer.write(("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                      f"Content-Length: {len(body)}\r\nRetry-After: 2\r\nConnection: close\r\n\r\n").encode() + body)
+        try:
+            await asyncio.wait_for(writer.drain(), 1)
+        except (OSError, asyncio.TimeoutError):
+            pass
 
     async def run(self):
         stop = asyncio.Event()
@@ -417,9 +570,18 @@ class Pool:
             await asyncio.gather(self.reconcile_task, return_exceptions=True)
         for client in tuple(self.clients):
             client.writer.close()
+        for lane in self.lanes.values():
+            lane.close()
 
 
 def validate_config(config):
+    Admission(config)
+    if type(config.get("stratumProxyProtocol", False)) is not bool:
+        raise ValueError("stratumProxyProtocol must be a boolean")
+    for name in ("trustedProxyNetworks", "httpTrustedProxyNetworks"):
+        networks(config, name)
+    if config.get("stratumProxyProtocol") and not config.get("trustedProxyNetworks"):
+        raise ValueError("PROXY protocol requires an explicit trusted transport network")
     network = config.get("network", "devnet")
     expected = {"devnet": 80, "testnet": 64}.get(network)
     if expected is None or config["addressPrefix"] != expected:

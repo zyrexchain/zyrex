@@ -6,6 +6,8 @@ import threading
 from functools import wraps
 from pathlib import Path
 from pow import address_bytes
+from chain_ledger import ChainLedger
+from query_budget import PublicQueryLimit, query_budget
 
 MAX_NANO = (1 << 63) - 1
 FEE_POLICY = "actual-transaction-v1"
@@ -58,7 +60,8 @@ def read_snapshot(method):
     def call(self, *args, **kwargs):
         if self.filename == ":memory:":
             with self.lock:
-                return method(self, *args, **kwargs)
+                with query_budget(self.db):
+                    return method(self, *args, **kwargs)
         db = sqlite3.connect(Path(self.filename).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
             db.row_factory = sqlite3.Row
@@ -67,13 +70,14 @@ def read_snapshot(method):
             db.execute("BEGIN")
             view = object.__new__(type(self))
             view.db = db
-            return method(view, *args, **kwargs)
+            with query_budget(db):
+                return method(view, *args, **kwargs)
         finally:
             db.close()
     return call
 
 
-class Ledger:
+class Ledger(ChainLedger):
     def __init__(self, filename):
         self.filename = filename
         self.lock = threading.RLock()
@@ -104,12 +108,26 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS fee_adjustments(
                 policy TEXT NOT NULL, address TEXT NOT NULL, amount INTEGER NOT NULL,
                 details TEXT NOT NULL, PRIMARY KEY(policy,address));
+            CREATE TABLE IF NOT EXISTS block_weights(
+                block INTEGER NOT NULL, address TEXT NOT NULL, weight TEXT NOT NULL,
+                PRIMARY KEY(block,address));
+            CREATE TABLE IF NOT EXISTS chain_events(
+                id INTEGER PRIMARY KEY, block INTEGER NOT NULL, expected_hash TEXT,
+                actual_hash TEXT, reason TEXT NOT NULL, created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS canonical_claims(
+                hash TEXT PRIMARY KEY COLLATE NOCASE, block INTEGER NOT NULL UNIQUE);
             CREATE INDEX IF NOT EXISTS shares_created ON shares(created);
             CREATE INDEX IF NOT EXISTS shares_address_worker ON shares(address,worker,created);
             CREATE INDEX IF NOT EXISTS shares_round_address ON shares(round,address,id);
             CREATE INDEX IF NOT EXISTS credits_address ON credits(address,block);
             CREATE INDEX IF NOT EXISTS fee_adjustments_address ON fee_adjustments(address);
             CREATE INDEX IF NOT EXISTS payouts_created ON payouts(created);
+            CREATE INDEX IF NOT EXISTS blocks_height_id ON blocks(height,id);
+            CREATE INDEX IF NOT EXISTS blocks_hash ON blocks(hash);
+            CREATE INDEX IF NOT EXISTS blocks_canonical_hash ON blocks(hash COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS payouts_status ON payouts(status);
+            CREATE INDEX IF NOT EXISTS shares_unsettled ON shares(id) WHERE round IS NULL;
+            CREATE INDEX IF NOT EXISTS balances_amount ON balances(amount,address);
         """)
         # Additive schema upgrade: historical signed payments and credits are immutable.
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(payouts)")}
@@ -117,6 +135,7 @@ class Ledger:
             if name not in columns:
                 self.db.execute("ALTER TABLE payouts ADD COLUMN " + name + " TEXT")
         self.db.commit()
+        self._migrate_canonical_claims()
 
     @synchronized
     def bind_network(self, genesis, pk):
@@ -145,6 +164,10 @@ class Ledger:
                 (msg, nonce, address, worker, str(weight), time.time()))
         return cursor.lastrowid
 
+    @read_snapshot
+    def share_exists(self, msg, nonce):
+        return self.db.execute("SELECT 1 FROM shares WHERE msg=? AND nonce=?", (msg, nonce)).fetchone() is not None
+
     @synchronized
     def block(self, work, nonce, share_id):
         with self.db:
@@ -158,6 +181,10 @@ class Ledger:
     @synchronized
     def orphan(self, block_id):
         with self.db:
+            block = self.db.execute("SELECT * FROM blocks WHERE id=?", (block_id,)).fetchone()
+            if block is None or block["status"] == "confirmed":
+                raise RuntimeError("A credited block requires operator review, not an orphan rewrite")
+            self._freeze_weights(block)
             self.db.execute("UPDATE blocks SET status='orphaned' WHERE id=?", (block_id,))
 
     @synchronized
@@ -171,13 +198,26 @@ class Ledger:
         if type(legacy_fee) is not int or legacy_fee < 0 or reward <= legacy_fee:
             raise ValueError("Reward cannot cover the payout transaction fee")
         with self.db:
-            status = self.db.execute("SELECT status FROM blocks WHERE id=?", (block["id"],)).fetchone()[0]
-            if status != "submitted":
+            if self.db.execute("SELECT 1 FROM meta WHERE key='halt'").fetchone():
                 return
-            rows = self.db.execute("SELECT * FROM shares WHERE round IS NULL AND id<=?", (block["end_share"],)).fetchall()
-            weights = {}
-            for row in rows:
-                weights[row["address"]] = weights.get(row["address"], 0) + int(row["weight"])
+            status = self.db.execute("SELECT status FROM blocks WHERE id=?", (block["id"],)).fetchone()[0]
+            if status == "confirmed":
+                return
+            if status not in ("submitted", "orphaned"):
+                raise RuntimeError("Unknown block accounting state")
+            if not isinstance(block_hash, str) or not block_hash:
+                raise ValueError("Missing canonical block identity")
+            claim = self.db.execute("SELECT block FROM canonical_claims WHERE hash=?", (block_hash,)).fetchone()
+            previous = self.db.execute("SELECT id FROM blocks WHERE hash=? COLLATE NOCASE AND id!=? LIMIT 1",
+                                       (block_hash, block["id"])).fetchone()
+            if claim or previous:
+                reason = "Canonical reward attribution is ambiguous. Review credits before resuming payouts."
+                self.db.execute("INSERT OR REPLACE INTO meta VALUES('halt',?)", (reason,))
+                self.db.execute("""INSERT INTO chain_events(block,expected_hash,actual_hash,reason,created)
+                    VALUES(?,?,?,?,?)""", (block["id"], None, block_hash, reason, time.time()))
+                return
+            self.db.execute("INSERT INTO canonical_claims VALUES(?,?)", (block_hash, block["id"]))
+            weights = self._freeze_weights(block, fallback=status == "orphaned")
             total = sum(weights.values())
             if total == 0:
                 raise RuntimeError("Cannot settle a block with no shares")
@@ -193,6 +233,14 @@ class Ledger:
     @synchronized
     def balances(self):
         return {row[0]: row[1] for row in self.db.execute("SELECT * FROM balances ORDER BY address")}
+
+    @read_snapshot
+    def payable_balances(self, minimum, limit=50):
+        positive_nano(minimum)
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("Invalid payout batch limit")
+        return {row[0]: row[1] for row in self.db.execute(
+            "SELECT address,amount FROM balances WHERE amount>=? ORDER BY address LIMIT ?", (minimum, limit))}
 
     @synchronized
     def prepare_payout(self, tx, amounts, gross_amounts=None, fees=None):
@@ -211,6 +259,8 @@ class Ledger:
             if type(charge) is not int or charge < 0 or amount != amounts[address] + charge:
                 raise ValueError("Payment fee does not match its gross debit")
         with self.db:
+            if self.db.execute("SELECT 1 FROM meta WHERE key='halt'").fetchone():
+                raise RuntimeError("Pool accounting is halted; no new payout can be prepared")
             for address, amount in gross.items():
                 cursor = self.db.execute("UPDATE balances SET amount=amount-? WHERE address=? AND amount>=?",
                                          (amount, address, amount))
@@ -262,7 +312,9 @@ class Ledger:
                 if reserve < 0 or reserve >= reward:
                     raise RuntimeError("Invalid historical fee reserve")
                 weights = {}
-                for row in self.db.execute("SELECT address,weight FROM shares WHERE round=?", (block["id"],)):
+                snapshots = self.db.execute("SELECT address,weight FROM block_weights WHERE block=?", (block["id"],)).fetchall()
+                source = snapshots or self.db.execute("SELECT address,weight FROM shares WHERE round=?", (block["id"],))
+                for row in source:
                     weight = int(row[1])
                     if weight <= 0:
                         raise RuntimeError("Invalid historical share weight")
@@ -340,6 +392,8 @@ class Ledger:
 
     @synchronized
     def payout_status(self, txid, status):
+        if status not in ("prepared", "broadcast", "confirmed"):
+            raise ValueError("Unknown payout status")
         with self.db:
             self.db.execute("UPDATE payouts SET status=? WHERE id=?", (status, txid))
 
@@ -483,7 +537,7 @@ class Ledger:
                 "connectedWorkers": sum(connected.values()), "recentPayouts": recent["items"],
                 "payoutCount": recent["total"], "payoutsLink": "/api/miner/" + address + "/payouts"}
 
-    @synchronized
+    @read_snapshot
     def gpu_validation(self):
         row = self.db.execute("SELECT value FROM meta WHERE key='gpu_validation'").fetchone()
         if not row:
@@ -500,7 +554,7 @@ class Ledger:
             return None
         return evidence
 
-    @synchronized
+    @read_snapshot
     def stats(self):
         now = time.time()
         rows = self.db.execute("SELECT weight FROM shares WHERE created>?", (now - 600,)).fetchall()
@@ -509,8 +563,9 @@ class Ledger:
         interval = min(600, max(1, now - (first or now)))
         workers = [dict(row) for row in self.db.execute("""SELECT address,worker,COUNT(*) accepted,
             MAX(created) lastShare FROM shares GROUP BY address,worker ORDER BY lastShare DESC LIMIT 100""")]
-        blocks = self.blocks()
-        payouts = [{k: v for k, v in row.items() if k != "raw"} for row in self.payouts()]
+        blocks = list(reversed([dict(row) for row in self.db.execute("SELECT * FROM blocks ORDER BY height DESC,id DESC LIMIT 100")]))
+        payouts = list(reversed([{k: v for k, v in dict(row).items() if k != "raw"}
+                                for row in self.db.execute("SELECT * FROM payouts ORDER BY created DESC,rowid DESC LIMIT 100")]))
         for payout in payouts:
             for field in ("amounts", "gross", "fees"):
                 values = json.loads(payout[field]) if payout[field] is not None else None
@@ -520,12 +575,18 @@ class Ledger:
         if migration:
             migration = {key: migration[key] for key in (
                 "policy", "reservedNanoZYRX", "spentNanoZYRX", "refundedNanoZYRX")}
-        refunds = {row[0]: row[1] for row in self.db.execute(
-            "SELECT address,amount FROM fee_adjustments WHERE policy=? ORDER BY address", (FEE_POLICY,))}
-        balances = self.balances()
+        refund_rows = self.db.execute(
+            "SELECT address,amount FROM fee_adjustments WHERE policy=? ORDER BY address LIMIT 101", (FEE_POLICY,)).fetchall()
+        refunds = {row[0]: row[1] for row in refund_rows[:100]}
+        balance_rows = self.db.execute("SELECT * FROM balances ORDER BY address LIMIT 101").fetchall()
+        balances = {row[0]: row[1] for row in balance_rows[:100]}
+        halt = self.db.execute("SELECT value FROM meta WHERE key='halt'").fetchone()
+        verification = self.db.execute("SELECT value FROM meta WHERE key='chain_verification'").fetchone()
         return {"acceptedShares": count, "estimatedHashrate": sum(int(row[0]) for row in rows) / interval,
                 "blocks": blocks[-100:], "balancesNanoZYRX": balances, "payouts": payouts[-100:],
-                "workers": workers, "halted": self.halted(), "gpuValidation": self.gpu_validation(),
+                "workers": workers, "halted": halt[0] if halt else None,
+                "chainVerification": json.loads(verification[0]) if verification else None,
                 "feeMigration": migration, "feeRefundsNanoZYRX": refunds,
+                "balancesTruncated": len(balance_rows) > 100, "feeRefundsTruncated": len(refund_rows) > 100,
                 "balancesNanoZYRXExact": {a: str(n) for a, n in balances.items()},
                 "feeRefundsNanoZYRXExact": {a: str(n) for a, n in refunds.items()}}

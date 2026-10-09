@@ -27,7 +27,9 @@ The account never requests a password, recovery phrase or wallet private key.
 
 The payout scheme is PROP with a 0% pool fee. SQLite persists accepted shares,
 rounds, balances and signed payouts. Consensus assigns 90% of the subsidy to
-miners and 10% to the team before pool distribution.
+miners and 10% to the team before pool distribution. Each of two independent team
+wallets receives `floor(subsidy / 20)` nanoZYRX; miners receive the integer remainder.
+The recipients are separate P2PK outputs, not a multisignature wallet.
 
 Balances and share weights use integer units. A largest-remainder allocation
 conserves every nanoZYRX. Each payout deducts one actual network transaction fee

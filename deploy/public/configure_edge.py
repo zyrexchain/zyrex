@@ -48,7 +48,14 @@ def main():
         if not (certificate / name).is_file():
             raise RuntimeError('Certificate has not been issued')
     names = f'{domain} explorer.{domain} stratum.{domain} pool.{domain}'
-    http_config = f'''map $host $zyrex_web_backend {{
+    http_config = f'''map $host $zyrex_pool_api_key {{
+    default "";
+    {domain} "zyrex-pool";
+    pool.{domain} "zyrex-pool";
+    stratum.{domain} "zyrex-pool";
+}}
+limit_req_zone $zyrex_pool_api_key zone=zyrex_pool_api:1m rate=40r/s;
+map $host $zyrex_web_backend {{
     default 127.0.0.1:28088;
     explorer.{domain} 127.0.0.1:28080;
 }}
@@ -71,16 +78,19 @@ server {{
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
     client_max_body_size 16k;
+    limit_req_status 503;
     location ~ ^/downloads/(zyrex-cli-linux-(?:amd64|arm64)\\.tar\\.gz|SHA256SUMS)$ {{
         return 302 https://github.com/zyrexchain/zyrex/releases/download/cli-v0.1.0-testnet/$1;
     }}
     location /downloads/ {{ return 302 https://github.com/zyrexchain/zyrex/releases; }}
     location / {{
         limit_except GET HEAD {{ deny all; }}
+        limit_req zone=zyrex_pool_api burst=80 nodelay;
         proxy_pass http://$zyrex_web_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Zyrex-Client-IP "";
         proxy_connect_timeout 3s;
         proxy_read_timeout 30s;
         proxy_intercept_errors on;
@@ -99,6 +109,10 @@ server {{
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
     root /var/www/zyrex-pool;
+    limit_req_status 503;
+    client_header_timeout 5s;
+    send_timeout 10s;
+    keepalive_timeout 15s;
     location = / {{
         limit_except GET HEAD {{ deny all; }}
         try_files /index.html =404;
@@ -122,12 +136,16 @@ server {{
     location /downloads/ {{ return 302 https://github.com/zyrexchain/zyrex/releases; }}
     location ~ ^/(api/stats|health)$ {{
         limit_except GET HEAD {{ deny all; }}
+        limit_req zone=zyrex_pool_api burst=80 nodelay;
+        proxy_set_header X-Zyrex-Client-IP "";
         proxy_pass http://127.0.0.1:28088;
         proxy_connect_timeout 3s;
         proxy_read_timeout 15s;
     }}
     location ~ ^/api/miner/ {{
         limit_except GET HEAD {{ deny all; }}
+        limit_req zone=zyrex_pool_api burst=80 nodelay;
+        proxy_set_header X-Zyrex-Client-IP "";
         proxy_pass http://127.0.0.1:28088;
         proxy_connect_timeout 3s;
         proxy_read_timeout 15s;
@@ -135,7 +153,8 @@ server {{
     location / {{ return 404; }}
 }}
 '''
-    stream_config = f'''map $ssl_preread_server_name $zyrex_tls_backend {{
+    stream_config = f'''limit_conn_zone $binary_remote_addr zone=zyrex_stratum_connections:1m;
+map $ssl_preread_server_name $zyrex_tls_backend {{
     {domain} 127.0.0.1:28443;
     explorer.{domain} 127.0.0.1:28443;
     stratum.{domain} 127.0.0.1:28443;
@@ -151,18 +170,22 @@ server {{
 }}
 server {{
     listen 3333;
+    limit_conn zyrex_stratum_connections 8;
+    proxy_protocol on;
     proxy_pass 127.0.0.1:23333;
     proxy_connect_timeout 5s;
-    proxy_timeout 3600s;
+    proxy_timeout 600s;
 }}
 server {{
     listen 3443 ssl;
+    limit_conn zyrex_stratum_connections 8;
+    proxy_protocol on;
     ssl_certificate {certificate}/fullchain.pem;
     ssl_certificate_key {certificate}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     proxy_pass 127.0.0.1:23333;
     proxy_connect_timeout 5s;
-    proxy_timeout 3600s;
+    proxy_timeout 600s;
 }}
 server {{
     listen 19533;

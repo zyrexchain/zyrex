@@ -16,8 +16,11 @@ It retains eUTXO, programmable contracts and Autolykos v2.
 | Exact integer emission | 86,399,999.99352 ZYRX |
 | Difficulty adjustment | Original DAA adapted to 60 seconds |
 
-Team payments are enforced by consensus. All rewards use integer nanoZYRX units.
+Team payments are enforced by consensus. The team allocation goes to two independent
+wallets: each receives `floor(reward / 20)` nanoZYRX; miners receive the remainder.
 
-Public testnet is live; mainnet is not launched.
+Public testnet is experimental and may reset. Test coins have no monetary value
+or guaranteed mainnet conversion. Use separate test-wallet recovery phrases.
+Mainnet is not launched.
 Downloads: [GitHub Releases](https://github.com/zyrexchain/zyrex/releases).
 The upstream [CC0 license](LICENSE) and attribution are retained.

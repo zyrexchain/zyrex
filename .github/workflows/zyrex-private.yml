@@ -16,14 +16,27 @@ jobs:
           java-version: '11'
       - name: Check English public content
         run: python3 scripts/check-public-content.py
-      - name: LAN pool PoW, Stratum and durable payout tests
+      - name: Pool resource budgets, reorganization safety and durable payouts
         run: python3 -m unittest discover -s pool -p 'test_*.py' -v
       - name: Explorer canonical index and rollback tests
         run: PYTHONPATH=pool python3 -m unittest discover -s explorer -p 'test_*.py' -v
       - name: Consensus, address, network and upstream PoW/DAA tests
         run: >-
           scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification *MessageSerializerSpecification *NetworkControllerSpec'
-          'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec' assembly
+          'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
+          *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
+      - name: Native DAA stress evidence for each source configuration
+        run: >-
+          scripts/sbt
+          'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation .local/audit-daa/results.json'
+      - name: Preserve native DAA evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-daa-verification
+          path: .local/audit-daa/results.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Launch three private nodes
         run: scripts/devnet-up
       - name: Test payments, payouts and restart recovery

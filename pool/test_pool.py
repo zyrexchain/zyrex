@@ -291,12 +291,14 @@ class AccountingTests(unittest.TestCase):
         self.ledger.settle(block, "old-canonical", 21, 1)
         node = object.__new__(Node)
         self.ledger.bind_network("genesis", PK)
-        node.config = {"confirmations": 5, "feeScriptHex": FEE_SCRIPT}
+        node.config = {"genesisId": "genesis", "confirmations": 5, "feeScriptHex": FEE_SCRIPT}
         node.header = Mock(return_value={"id": "different", "powSolutions": {"pk": PK, "n": "a"}})
-        node.rpc = Mock()
+        node.message = Mock(return_value=MESSAGE)
+        node.rpc = Mock(return_value={"genesisBlockId": "genesis", "network": "devnet",
+            "fullHeight": 15, "headersHeight": 15, "bestFullHeaderId": "different", "bestHeaderId": "different"})
         node.reconcile(self.ledger, 15)
         self.assertIsNotNone(self.ledger.halted())
-        node.rpc.assert_not_called()
+        node.rpc.assert_called_once_with("/info")
         self.assertEqual(self.ledger.balances(), {ADDRESS1: 20})
         self.assertIsNone(self.ledger.db.execute("SELECT value FROM meta WHERE key='fee_policy'").fetchone())
         self.assertEqual(self.ledger.db.execute("SELECT COUNT(*) FROM fee_adjustments").fetchone()[0], 0)
@@ -305,13 +307,20 @@ class AccountingTests(unittest.TestCase):
         block = self.found(ADDRESS1, "a")
         node = object.__new__(Node)
         self.ledger.bind_network("genesis", PK)
-        node.config = {"confirmations": 5, "payoutFeeNano": 1_000_000, "minimumPayoutNano": 1_000_000_000,
+        node.config = {"genesisId": "genesis", "confirmations": 5,
+                       "payoutFeeNano": 1_000_000, "minimumPayoutNano": 1_000_000_000,
                        "feeScriptHex": FEE_SCRIPT}
         node.reward_script = "reward-script"
         node.header = Mock(return_value={"id": "canonical", "powSolutions": {"pk": PK, "n": "a"}})
+        node.message = Mock(return_value=MESSAGE)
         confirmed = False
+        tip_height = 13
         broadcasts = []
         def rpc(path, payload=None):
+            if path == "/info":
+                return {"genesisBlockId": "genesis", "network": "devnet",
+                    "fullHeight": tip_height, "headersHeight": tip_height,
+                    "bestFullHeaderId": "canonical", "bestHeaderId": "canonical"}
             if path == "/blocks/canonical":
                 return {"blockTransactions": {"transactions": [{"outputs": [
                     {"value": 90_000_000_000, "ergoTree": "reward-script"},
@@ -332,12 +341,15 @@ class AccountingTests(unittest.TestCase):
         node.rpc = rpc
         node.reconcile(self.ledger, 13)
         self.assertEqual(self.ledger.balances(), {})
+        tip_height = 14
         with self.assertRaises(TimeoutError):
             node.reconcile(self.ledger, 14)
         self.assertEqual(self.ledger.balances()[ADDRESS1], 0)
+        tip_height = 15
         node.reconcile(self.ledger, 15)
         self.assertEqual(broadcasts, ["signed-id", "signed-id"])
         confirmed = True
+        tip_height = 16
         node.reconcile(self.ledger, 16)
         self.assertEqual(self.ledger.payouts()[0]["status"], "confirmed")
         self.assertEqual(len(self.ledger.payouts()), 1)

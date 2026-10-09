@@ -11,7 +11,30 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
-from pow import ALPHABET, address_bytes, digest
+from pow import ALPHABET, address_bytes, digest, validate_miner_address
+
+
+# Canonical Pay2SHAddress.script in the pinned scripting SDK (version 6.0.7).
+# It checks the 192-bit hash of context variable 126 and evaluates that variable.
+P2SH_PREFIX = bytes.fromhex('00ea02d193b4cbe4e37e0e040004300e18')
+P2SH_SUFFIX = bytes.fromhex('d4087e')
+
+
+def address_script(address):
+    """Resolve an address to its canonical locking script, including P2S aliases."""
+    raw = address_bytes(address)
+    if raw[0] not in (65, 66, 67):
+        raise ValueError('Address belongs to another network')
+    if raw[0] == 65:
+        validate_miner_address(address, prefix=64)
+        return (bytes.fromhex('0008cd') + raw[1:]).hex()
+    if raw[0] == 66:
+        if len(raw) != 25:
+            raise ValueError('Invalid P2SH script hash length')
+        return (P2SH_PREFIX + raw[1:] + P2SH_SUFFIX).hex()
+    if len(raw) < 3:
+        raise ValueError('Invalid P2S script length')
+    return raw[1:].hex()
 
 
 def encode_address(payload):
@@ -28,6 +51,8 @@ def script_address(script):
     raw = bytes.fromhex(script)
     if len(raw) == 36 and raw[:3] == bytes.fromhex('0008cd'):
         return encode_address(b'\x41' + raw[3:])
+    if len(raw) == len(P2SH_PREFIX) + 24 + len(P2SH_SUFFIX) and raw.startswith(P2SH_PREFIX) and raw.endswith(P2SH_SUFFIX):
+        return encode_address(b'\x42' + raw[len(P2SH_PREFIX):-len(P2SH_SUFFIX)])
     return encode_address(b'\x43' + raw)
 
 
@@ -60,6 +85,7 @@ class Index:
             CREATE TABLE IF NOT EXISTS boxes(id TEXT PRIMARY KEY,tx TEXT,height INTEGER REFERENCES blocks(height)
                 ON DELETE CASCADE,value TEXT,script TEXT,address TEXT,spent_by TEXT,spent_height INTEGER);
             CREATE INDEX IF NOT EXISTS boxes_address ON boxes(address);
+            CREATE INDEX IF NOT EXISTS boxes_script ON boxes(script COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS transactions_height ON transactions(height);
         ''')
         existing = self.db.execute('SELECT genesis FROM identity').fetchone()
@@ -192,13 +218,12 @@ class Index:
                 if row:
                     return dict(json.loads(row[0]), height=row[1], confirmations=height-row[1]+1)
             elif path.path.startswith('/api/address/'):
-                raw = address_bytes(key)
-                if not 65 <= raw[0] <= 67:
-                    raise ValueError('Address belongs to another network')
+                script = address_script(key)
                 balance = sum(int(row[0]) for row in self.db.execute(
-                    'SELECT value FROM boxes WHERE address=? AND spent_by IS NULL', (key,)))
+                    'SELECT value FROM boxes WHERE script=? COLLATE NOCASE AND spent_by IS NULL', (script,)))
                 boxes = [dict(row) for row in self.db.execute(
-                    'SELECT id,tx,height,value,spent_by FROM boxes WHERE address=? ORDER BY height DESC LIMIT 100', (key,))]
+                    'SELECT id,tx,height,value,spent_by FROM boxes WHERE script=? COLLATE NOCASE '
+                    'ORDER BY height DESC LIMIT 100', (script,))]
                 return {'address': key, 'balanceNano': str(balance), 'indexedHeight': height, 'boxes': boxes}
         raise LookupError('Not found')
 

@@ -1,0 +1,588 @@
+{
+  "format" : 1,
+  "oracle" : "Native HeaderSerializer.bytesWithoutPow and AutolykosPowScheme.msgByHeader; no Python-generated expected results",
+  "regenerate" : "sbt \"zyrexCore/Test/runMain org.ergoplatform.mining.ZyrexPoolHeaderVectors\"",
+  "invalidCasePolicy" : "Invalid cases describe pool input-policy rejection, not native consensus rejection. In particular native serialization supports v1, while pool attribution requires v2.",
+  "vectors" : [
+    {
+      "name" : "v2-zero",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "02000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8000808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f000000000000ff8000",
+      "msg" : "63957e2fa167d4aeecccd3482628843b872609dfdbcc0d304ee7f573b466d253"
+    },
+    {
+      "name" : "v2-vlq-one-byte-max",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 127,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 2147483648,
+        "height" : 127,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "02000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f807f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f800000007f00ff8000",
+      "msg" : "a85b1df48419facda25a8c0c7f03dcceaddddf7643b93994ff4b70cea8bcf2ed"
+    },
+    {
+      "name" : "v2-vlq-two-byte-min",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 128,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 4294967295,
+        "height" : 128,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "02000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808001808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fffffffff800100ff8000",
+      "msg" : "9ea3a02e2b92dd8436beed57166079437c4a228e6c50991bbf481b41eda064a0"
+    },
+    {
+      "name" : "v3-vlq-two-byte-max",
+      "header" : {
+        "version" : 3,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 16383,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 2147483649,
+        "height" : 16383,
+        "votes" : "7f0180",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "03000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80ff7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f80000001ff7f7f018000",
+      "msg" : "32e5e7ca9c2a6ac9e7caa0bce27b9db1c0cab7ec7fdcb714b2ac861cf0bd7eeb"
+    },
+    {
+      "name" : "v3-vlq-three-byte-min",
+      "header" : {
+        "version" : 3,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 16384,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 83951616,
+        "height" : 16384,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "03000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80808001808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f0501000080800100ff8000",
+      "msg" : "8c9990fdcd9e4c898dec497c1e04eecb2d9b21415754ceb7e24b875a4aa5e7f3"
+    },
+    {
+      "name" : "v4-vlq-three-byte-max",
+      "header" : {
+        "version" : 4,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 2097151,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 4294967295,
+        "height" : 2097151,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "04000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80ffff7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fffffffffffff7f00ff8000",
+      "msg" : "7f17fccbc8651c2696b474d5e41a2d957b61d1701c0c16f9d8ce10b1d3d4ae33"
+    },
+    {
+      "name" : "v4-vlq-four-byte-min",
+      "header" : {
+        "version" : 4,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 2097152,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 2147483648,
+        "height" : 2097152,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "04000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8080808001808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f800000008080800100ff8000",
+      "msg" : "366fa9993210ff62f4cbf45dcf02aedd4e27b46c6370e009506a3598322e42eb"
+    },
+    {
+      "name" : "v4-native-integer-maxima",
+      "header" : {
+        "version" : 4,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 9223372036854775807,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 4294967295,
+        "height" : 2147483647,
+        "votes" : "ffffff",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "04000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80ffffffffffffffff7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fffffffffffffffff07ffffff00",
+      "msg" : "b40306a6d25d437174f261772ff9a14d8f0ad978dbb854b7807e1113c4d0985f"
+    },
+    {
+      "name" : "v5-future-fields",
+      "header" : {
+        "version" : 5,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 128,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 2147483648,
+        "height" : 16384,
+        "votes" : "00ff80",
+        "unparsedBytes" : "00ff80"
+      },
+      "bytesWithoutPow" : "05000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808001808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f8000000080800100ff800300ff80",
+      "msg" : "def2f560fe743155f5271a8801488f9fb82553dd798ca131b1131ed385e7d9fa"
+    },
+    {
+      "name" : "v5-max-future-fields",
+      "header" : {
+        "version" : 5,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 9223372036854775807,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 4294967295,
+        "height" : 2147483647,
+        "votes" : "00ff80",
+        "unparsedBytes" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe"
+      },
+      "bytesWithoutPow" : "05000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80ffffffffffffffff7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fffffffffffffffff0700ff80ff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe",
+      "msg" : "35e0f54748546663d74828fae9bbe268718ade3af8ffe87af93653fd2968b2d8"
+    },
+    {
+      "name" : "upstream-autolykos-v2",
+      "source" : "AutolykosPowSchemeSpec independent published mining vector",
+      "header" : {
+        "version" : 2,
+        "parentId" : "ac2101807f0000ca01ff0119db227f202201007f62000177a080005d440896d0",
+        "adProofsRoot" : "5d3f80dcff7f5e7f59007294c180808d0158d1ff6ba10000f901c7f0ef87dcff",
+        "transactionsRoot" : "f17fffacb6ff7f7f1180d2ff7f1e24ffffe1ff937f807f0797b9ff6ebdae007e",
+        "stateRoot" : "5c8c00b8403d3701557181c8df800001b6d5009e2201c6ff807d71808c00019780",
+        "timestamp" : 4928911477310178288,
+        "extensionHash" : "1480887f80007f4b01cf7f013ff1ffff564a0000b9a54f00770e807f41ff88c0",
+        "nBits" : 37748736,
+        "height" : 614400,
+        "votes" : "000000",
+        "unparsedBytes" : ""
+      },
+      "bytesWithoutPow" : "02ac2101807f0000ca01ff0119db227f202201007f62000177a080005d440896d05d3f80dcff7f5e7f59007294c180808d0158d1ff6ba10000f901c7f0ef87dcfff17fffacb6ff7f7f1180d2ff7f1e24ffffe1ff937f807f0797b9ff6ebdae007e5c8c00b8403d3701557181c8df800001b6d5009e2201c6ff807d71808c00019780f087adb3fcdbc0b3441480887f80007f4b01cf7f013ff1ffff564a0000b9a54f00770e807f41ff88c00240000080c02500000000",
+      "msg" : "548c3e602a8f36f8f2738f5f643b02425038044d98543a51cabaa9785e7e864f"
+    },
+    {
+      "name" : "public-testnet-height-91",
+      "source" : "Public testnet canonical header at height 91",
+      "header" : {
+        "version" : 4,
+        "parentId" : "12292e4180e487a038cd45917d52930f2a7e37e71c0efea4f1705e0b5c8a968f",
+        "adProofsRoot" : "0afc362b12fcff01b2f524c90087bced26688410890ed207dd6d4fabd86b869c",
+        "transactionsRoot" : "19c4c454f0e7a1509d3e7d35ef9ddd3cc537d3f246d5271e4c0de921f11035ac",
+        "stateRoot" : "82932859803dfd525cd03a3a55ff9ac105c81214c156670ba4000b354357209b09",
+        "timestamp" : 1791539128167,
+        "extensionHash" : "edcc8f30fd1bbfcfc95335ddce1c3f1e40b55415f4f41890a9def1b3f46a7505",
+        "nBits" : 83951616,
+        "height" : 91,
+        "votes" : "000000",
+        "unparsedBytes" : ""
+      },
+      "canonicalHeaderId" : "4a66c2c8176b9ab5b0969962d5ce3a1ff6d203fa4fda1c13142c8a15d59b1d06",
+      "bytesWithoutPow" : "0412292e4180e487a038cd45917d52930f2a7e37e71c0efea4f1705e0b5c8a968f0afc362b12fcff01b2f524c90087bced26688410890ed207dd6d4fabd86b869c19c4c454f0e7a1509d3e7d35ef9ddd3cc537d3f246d5271e4c0de921f11035ac82932859803dfd525cd03a3a55ff9ac105c81214c156670ba4000b354357209b09e7ceb6809234edcc8f30fd1bbfcfc95335ddce1c3f1e40b55415f4f41890a9def1b3f46a7505050100005b00000000",
+      "msg" : "6d54c7ef576054d9aa210eb3a74476aa6494e7e87c3ee3984b3537a7eb2aa039"
+    }
+  ],
+  "invalid" : [
+    {
+      "name" : "autolykos-v1",
+      "reason" : "Pool only verifies native Autolykos v2 headers",
+      "header" : {
+        "version" : 1,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "version-zero",
+      "reason" : "Unsupported protocol version",
+      "header" : {
+        "version" : 0,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "version-negative",
+      "reason" : "Malformed protocol version",
+      "header" : {
+        "version" : -1,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "version-outside-signed-native-byte",
+      "reason" : "Protocol version exceeds supported native range",
+      "header" : {
+        "version" : 128,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "version-is-boolean",
+      "reason" : "JSON booleans are not native integers",
+      "header" : {
+        "version" : true,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "timestamp-overflow",
+      "reason" : "Timestamp exceeds native nonnegative Long",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 9223372036854775808,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "timestamp-negative",
+      "reason" : "Unsigned timestamp is negative",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : -1,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "timestamp-is-string",
+      "reason" : "Native JSON timestamp must be an integer",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : "128",
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "height-overflow",
+      "reason" : "Height exceeds native nonnegative Int",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 2147483648,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "height-negative",
+      "reason" : "Unsigned height is negative",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : -1,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "nbits-overflow",
+      "reason" : "Difficulty bits exceed unsigned 32-bit range",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 4294967296,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "nbits-negative",
+      "reason" : "Difficulty bits are negative",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : -1,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "votes-too-short",
+      "reason" : "Votes must occupy three bytes",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "0000",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "parent-too-short",
+      "reason" : "Parent ID must occupy 32 bytes",
+      "header" : {
+        "version" : 2,
+        "parentId" : "00000000000000000000000000000000000000000000000000000000000000",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "state-root-too-short",
+      "reason" : "State root includes its 33rd AVL height byte",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "0000000000000000000000000000000000000000000000000000000000000000",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "invalid-hex",
+      "reason" : "Digest contains a non-hex character",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : ""
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "pre-v5-future-fields",
+      "reason" : "Native parser does not retain future fields before version 5",
+      "header" : {
+        "version" : 3,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : "00"
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "future-fields-overflow",
+      "reason" : "Future-field length exceeds one unsigned byte",
+      "header" : {
+        "version" : 5,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "future-fields-odd-hex",
+      "reason" : "Future fields are not complete bytes",
+      "header" : {
+        "version" : 5,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80",
+        "unparsedBytes" : "a"
+      },
+      "expected" : "pool-reject"
+    },
+    {
+      "name" : "missing-future-field-length",
+      "reason" : "Canonical header JSON must explicitly encode future fields",
+      "header" : {
+        "version" : 2,
+        "parentId" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "adProofsRoot" : "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "transactionsRoot" : "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "stateRoot" : "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+        "timestamp" : 0,
+        "extensionHash" : "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "nBits" : 0,
+        "height" : 0,
+        "votes" : "00ff80"
+      },
+      "expected" : "pool-reject"
+    }
+  ]
+}
