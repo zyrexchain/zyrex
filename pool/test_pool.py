@@ -199,6 +199,22 @@ class ReceivingWalletTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 self.smoke.wait_for_received_payment(19556, "tx", ADDRESS1, 100)
 
+    def test_compact_public_payout_uses_exact_amounts_for_receiving_validation(self):
+        value = (1 << 53) + 7
+        payout = {"amountsExact": {ADDRESS1: str(value)}, "amounts": json.dumps({ADDRESS1: 1})}
+        amounts = self.smoke.payout_amounts(payout)
+        self.assertEqual(amounts, {ADDRESS1: value})
+        received = {"numConfirmations": 5, "outputs": [{"value": value, "address": ADDRESS1}]}
+        with patch.object(self.smoke, "api", return_value=received):
+            self.smoke.wait_for_received_payment(19556, "tx", ADDRESS1, amounts[ADDRESS1])
+        self.assertEqual(self.smoke.payout_amounts({"amounts": json.dumps({ADDRESS1: value})}), amounts)
+
+    def test_malformed_exact_payout_never_falls_back_to_legacy_amount(self):
+        for value in (None, 100, True, 1.5, "-1", "1.5", "0", "1e3"):
+            payout = {"amountsExact": {ADDRESS1: value}, "amounts": json.dumps({ADDRESS1: 100})}
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.smoke.payout_amounts(payout)
+
 
 class AccountingTests(unittest.TestCase):
     def setUp(self):

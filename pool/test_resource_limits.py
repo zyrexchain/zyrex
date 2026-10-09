@@ -275,6 +275,70 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await maintenance
 
+    async def recovered_solution(self, replacement_height):
+        self.pool.info = {"fullHeight": 614399, "bestFullHeaderId": "a" * 64}
+        self.pool.work["b"] = (1 << 256) - 1
+        pair, prefix, old_job = await self.worker()
+        self.pool.solved_height = 614400
+        old_params = [ADDRESS1 + ".control", old_job[0], "0", "0", prefix + "000000000001"]
+        self.assertFalse(self.pool.apply_info(dict(self.pool.info)))
+        self.assertEqual((await self.request(pair, "mining.submit", old_params))["error"][0], 21)
+        self.assertEqual(self.pool.solved_height, 614400)
+        self.assertEqual(self.pool.ledger.blocks(), [])
+        self.pool.node.rpc.assert_not_called()
+        self.assertTrue(self.pool.apply_info({"fullHeight": replacement_height, "bestFullHeaderId": "b" * 64}))
+        self.assertEqual(self.pool.solved_height, replacement_height)
+        self.assertFalse(self.pool.ready())
+        client = next(iter(self.pool.clients))
+        self.assertEqual(len(client.jobs), 0)
+        self.pool.work = {"msg": "c" * 64, "h": replacement_height + 1, "b": (1 << 256) - 1, "pk": PK}
+        await client.job(True)
+        while True:
+            notice = json.loads(await asyncio.wait_for(pair[0].readline(), 2))
+            if notice.get("method") == "mining.notify":
+                job = notice["params"]
+                break
+        with patch("server.hit", return_value=2) as verifier:
+            params = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000002"]
+            self.assertTrue((await self.request(pair, "mining.submit", params))["result"])
+            self.assertEqual((await self.request(pair, "mining.submit", params))["error"][0], 21)
+            self.assertEqual((await self.request(pair, "mining.submit", old_params))["error"][0], 21)
+        self.assertEqual(verifier.call_count, 1)
+        self.pool.node.rpc.assert_called_once_with("/mining/solution", {"n": params[-1], "pk": PK})
+        blocks = self.pool.ledger.blocks()
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["height"], replacement_height + 1)
+        self.assertEqual(blocks[0]["msg"], self.pool.work["msg"])
+        self.assertEqual(self.pool.ledger.stats()["acceptedShares"], 1)
+
+    async def test_canonical_tip_rollback_reopens_solved_height_for_one_new_solution(self):
+        await self.recovered_solution(614398)
+
+    async def test_same_height_tip_replacement_reopens_solved_height_for_one_new_solution(self):
+        await self.recovered_solution(614399)
+
+    async def test_old_branch_solution_rpc_completion_does_not_restore_its_suppression_marker(self):
+        self.pool.info = {"fullHeight": 614399, "bestFullHeaderId": "a" * 64}
+        self.pool.work["b"] = (1 << 256) - 1
+        pair, prefix, job = await self.worker()
+        started, release = threading.Event(), threading.Event()
+        self.pool.node.rpc.side_effect = lambda *_: (started.set(), release.wait(5))
+        params = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000001"]
+        with patch("server.hit", return_value=2):
+            submit = asyncio.create_task(self.request(pair, "mining.submit", params))
+            try:
+                while not started.is_set():
+                    await asyncio.sleep(0.001)
+                self.assertTrue(self.pool.apply_info({"fullHeight": 614399, "bestFullHeaderId": "b" * 64}))
+                self.assertEqual(self.pool.solved_height, 614399)
+                release.set()
+                self.assertTrue((await submit)["result"])
+                self.assertEqual(self.pool.solved_height, 614399)
+                self.assertEqual(len(self.pool.ledger.blocks()), 1)
+            finally:
+                release.set()
+                await asyncio.gather(submit, return_exceptions=True)
+
     async def test_static_difficulty_does_not_accumulate_unused_retarget_samples(self):
         self.pool.resources.limits.update({"requestBurst": 400, "shareBurst": 400})
         pair, prefix, job = await self.worker(password="d=0.001")

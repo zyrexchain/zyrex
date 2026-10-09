@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import json
+import re
 import subprocess
 import sys
 import time
@@ -15,6 +16,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pool"))
 from pow import hit
+from ledger import positive_nano
+
+
+def payout_amounts(payout):
+    """Read exact public amounts while retaining compatibility with older pool responses."""
+    if "amountsExact" in payout:
+        values = payout["amountsExact"]
+        if not isinstance(values, dict) or any(not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value)
+                                               for value in values.values()):
+            raise ValueError("Malformed exact public payout amounts")
+        return {address: positive_nano(int(value)) for address, value in values.items()}
+    values = json.loads(payout["amounts"])
+    if not isinstance(values, dict):
+        raise ValueError("Malformed legacy public payout amounts")
+    return {address: positive_nano(value) for address, value in values.items()}
 
 
 def search(msg, height, prefix, start, count, target):
@@ -125,6 +141,7 @@ async def main(args):
     addresses = [api(f"http://127.0.0.1:{port}/wallet/addresses", "hello")[0] for port in (19556, 19557)]
     # Public addresses are safe to read; wallet APIs require auth even for address lists.
     start_stats = api(f"http://{args.host}:8088/api/stats")
+    previous_payments = {p["id"] for p in start_stats["payouts"] if p["status"] == "confirmed"}
     stop = asyncio.Event()
     with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
         miners = [Miner(args.host, address, "cpu-smoke-" + str(i + 1), executor) for i, address in enumerate(addresses)]
@@ -138,8 +155,8 @@ async def main(args):
                         task.result()
                 stats = await asyncio.to_thread(api, f"http://{args.host}:8088/api/stats")
                 confirmed = [p for p in stats["payouts"] if p["status"] == "confirmed"]
-                rewarded = {address for p in confirmed for address in json.loads(p["amounts"])}
-                if len(confirmed) > len([p for p in start_stats["payouts"] if p["status"] == "confirmed"]) and \
+                rewarded = {address for p in confirmed for address in payout_amounts(p)}
+                if any(p["id"] not in previous_payments for p in confirmed) and \
                         all(m.accepted > 0 and m.duplicate_verified for m in miners) and set(addresses) <= rewarded:
                     success = True
                     break
@@ -195,7 +212,7 @@ def verify(args, miners):
     for port, address in zip((19556, 19557), addresses):
         payments = []
         for payout in stats["payouts"]:
-            amounts = json.loads(payout["amounts"])
+            amounts = payout_amounts(payout)
             if payout["status"] != "confirmed" or address not in amounts:
                 continue
             wait_for_received_payment(port, payout["id"], address, amounts[address])

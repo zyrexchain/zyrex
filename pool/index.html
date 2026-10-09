@@ -191,15 +191,28 @@ function emptyRow(parent, message, columns) {
   tr.firstChild.colSpan = columns;
 }
 async function api(path, signal) {
-  const response = await fetch(path, {signal, cache: 'no-store'});
-  const result = await response.json();
-  if (!response.ok) {
-    const message = response.status === 400 ? 'Invalid address or request. Use a wallet address for this network.' :
-      response.status === 404 ? 'This account is unavailable.' : 'Pool account data is unavailable. Please try again.';
-    throw new Error(message);
+  const controller = new AbortController();
+  const cancel = () => controller.abort(signal.reason);
+  if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, {once: true});
+  let timedOut = false;
+  const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, 10000);
+  try {
+    const response = await fetch(path, {signal: controller.signal, cache: 'no-store'});
+    const result = await response.json();
+    if (!response.ok) {
+      const message = response.status === 400 ? 'Invalid address or request. Use a wallet address for this network.' :
+        response.status === 404 ? 'This account is unavailable.' : 'Pool account data is unavailable. Please try again.';
+      throw new Error(message);
+    }
+    if (!result || typeof result !== 'object') throw new Error('Invalid response from the pool.');
+    return result;
+  } catch (error) {
+    if (timedOut) throw new Error('Pool request timed out. Please try again.');
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+    signal?.removeEventListener('abort', cancel);
   }
-  if (!result || typeof result !== 'object') throw new Error('Invalid response from the pool.');
-  return result;
 }
 function updateCommand() {
   const address = $('address').value.trim();

@@ -180,7 +180,8 @@ class Client:
             raise StratumError(26, "Accounting is temporarily unavailable") from error
         if score >= target:
             raise StratumError(23, "Low difficulty share")
-        if not self.pool.ready() or work["h"] != self.pool.work["h"] or work["h"] <= self.pool.solved_height:
+        if not self.pool.ready() or params[1] not in self.jobs or work["h"] != self.pool.work["h"] \
+                or work["h"] <= self.pool.solved_height:
             raise StratumError(21, "Stale job height")
         try:
             await self.pool.lanes["writes"].run(
@@ -201,7 +202,8 @@ class Client:
                 async with self.pool.submit_lock:
                     await self.pool.lanes["solutions"].run(
                         self.pool.node.rpc, "/mining/solution", {"n": nonce_hex, "pk": work["pk"]})
-                    self.pool.solved_height = max(self.pool.solved_height, work["h"])
+                    if params[1] in self.jobs:
+                        self.pool.solved_height = max(self.pool.solved_height, work["h"])
                 LOG.info("Block submitted: height=%s worker=%s nonce=%s", work["h"], self.username, nonce_hex)
                 self.pool.refresh.set()
             except (OSError, ValueError, TimeoutError, ResourceBusy) as error:
@@ -308,6 +310,22 @@ class Pool:
             self.ledger.block(work, nonce, ident)
         return ident
 
+    def apply_info(self, info):
+        """Release solved-height suppression only after an observed applied branch change."""
+        previous = self.info or {}
+        old_height, height = previous.get("fullHeight"), info.get("fullHeight")
+        old_id, block_id = previous.get("bestFullHeaderId"), info.get("bestFullHeaderId")
+        valid_heights = type(old_height) is int and type(height) is int and old_height >= 1 and height >= 1
+        replaced_tip = isinstance(old_id, str) and bool(old_id) and isinstance(block_id, str) and bool(block_id) and old_id != block_id
+        changed = valid_heights and (height < old_height or height == old_height and replaced_tip)
+        if changed:
+            self.solved_height = height
+            self.work = None
+            for client in tuple(self.clients):
+                client.jobs.clear()
+        self.info = dict(info)
+        return changed
+
     def ready(self):
         return self.work is not None and self.error is None and time.monotonic() - self.checked_at < 15
 
@@ -365,7 +383,7 @@ class Pool:
         while True:
             try:
                 if time.monotonic() - self.checked_at >= 5 or self.info is None:
-                    self.info = await self.lanes["templates"].run(self.node.ready)
+                    self.apply_info(await self.lanes["templates"].run(self.node.ready))
                     await self.lanes["writes"].run(self.ledger.bind_network, self.config["genesisId"], self.node.pk)
                     self.checked_at = time.monotonic()
                 work = await self.lanes["templates"].run(self.node.rpc, "/mining/candidate")
