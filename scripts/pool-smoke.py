@@ -5,7 +5,9 @@ This does not certify GPU miner compatibility. It uses the Miningcore wire forma
 """
 import argparse
 import asyncio
+import collections
 import concurrent.futures
+import hashlib
 import json
 import re
 import subprocess
@@ -31,6 +33,37 @@ def payout_amounts(payout):
     if not isinstance(values, dict):
         raise ValueError("Malformed legacy public payout amounts")
     return {address: positive_nano(value) for address, value in values.items()}
+
+
+def progress_snapshot(stats):
+    """Preserve public accounting state when a real integration test cannot finish."""
+    result = {key: stats.get(key) for key in ("ready", "nodeHeight", "candidateHeight", "halted",
+              "nodeError", "payoutError", "chainVerification", "acceptedShares", "balancesNanoZYRXExact")}
+    for key in ("blocks", "payouts"):
+        result[key + "ByStatus"] = dict(collections.Counter(row.get("status") for row in stats.get(key, [])))
+    result["recentBlocks"] = [{key: row.get(key) for key in ("height", "status", "hash")}
+                              for row in stats.get("blocks", [])[-10:]]
+    result["recentPayouts"] = [{key: row.get(key) for key in ("id", "status", "amountsExact")}
+                               for row in stats.get("payouts", [])[-10:]]
+    return result
+
+
+def source_evidence():
+    root = Path(__file__).resolve().parents[1]
+    jar = root / "target/scala-2.12/zyrex.jar"
+    return {"sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+            "sourceTreeDirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True)),
+            "nativeJarSha256": hashlib.sha256(jar.read_bytes()).hexdigest() if jar.exists() else None}
+
+
+def save_failure(args, stats, miners, error):
+    report = {**source_evidence(), "success": False, "error": str(error), "publicPoolState": progress_snapshot(stats),
+              "miners": [{"address": miner.address, "acceptedShares": miner.accepted,
+                          "duplicateRejected": miner.duplicate_verified} for miner in miners]}
+    destination = Path(args.report).with_name("pool-smoke-failure.json")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(report, indent=2) + "\n")
+    print("Pool integration failure state: " + json.dumps(report), flush=True)
 
 
 def search(msg, height, prefix, start, count, target):
@@ -148,12 +181,17 @@ async def main(args):
         tasks = [asyncio.create_task(m.run(stop)) for m in miners]
         deadline = time.monotonic() + args.timeout
         success = False
+        stats = start_stats
+        last_progress = 0
         try:
             while time.monotonic() < deadline:
                 for task in tasks:
                     if task.done():
                         task.result()
                 stats = await asyncio.to_thread(api, f"http://{args.host}:8088/api/stats")
+                if time.monotonic() - last_progress >= 30:
+                    print("Pool integration progress: " + json.dumps(progress_snapshot(stats)), flush=True)
+                    last_progress = time.monotonic()
                 confirmed = [p for p in stats["payouts"] if p["status"] == "confirmed"]
                 rewarded = {address for p in confirmed for address in payout_amounts(p)}
                 if any(p["id"] not in previous_payments for p in confirmed) and \
@@ -161,12 +199,16 @@ async def main(args):
                     success = True
                     break
                 await asyncio.sleep(2)
+        except Exception as error:
+            save_failure(args, stats, miners, error)
+            raise
         finally:
             stop.set()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         if not success:
+            save_failure(args, stats, miners, "Timed out waiting for confirmed payments to both miners")
             raise RuntimeError("Timed out waiting for a confirmed pool payment to both miners")
     verify(args, [{"address": m.address, "acceptedShares": m.accepted,
                    "duplicateRejected": m.duplicate_verified} for m in miners])
@@ -219,7 +261,8 @@ def verify(args, miners):
             payments.append(payout["id"])
         assert payments
         received.append({"address": address, "confirmedPayments": payments})
-    report = {"stratumUrl": stats["stratumUrl"], "wireProtocol": "Autolykos/Miningcore Stratum v1",
+    report = {**source_evidence(), "success": True,
+              "stratumUrl": stats["stratumUrl"], "wireProtocol": "Autolykos/Miningcore Stratum v1",
               "gpuVerified": False, "height": stats["nodeHeight"],
               "miners": miners, "restartVerified": restarted,
               "blocks": stats["blocks"], "payouts": stats["payouts"], "receivingWallets": received,

@@ -47,6 +47,17 @@ jobs:
         run: scripts/pool-up
       - name: Real Stratum proof search and confirmed payments to two miners
         run: python3 scripts/pool-smoke.py --host 127.0.0.1 --restart
+      - name: Preserve source-bound native payment and pool integration evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: private-integration-verification
+          path: |
+            .local/private-smoke.json
+            .local/pool-smoke.json
+            .local/pool-smoke-failure.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Stop private nodes
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.pool.yml down
