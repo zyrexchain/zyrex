@@ -120,7 +120,7 @@ public final class NodeManager implements AutoCloseable {
         writePrivate(home.resolve("node.conf"), config().getBytes(StandardCharsets.UTF_8));
         writePrivate(home.resolve("logback.xml"), logging().getBytes(StandardCharsets.UTF_8));
         Path launcherLog = home.resolve("launcher.log");
-        writePrivate(launcherLog, new byte[0]);
+        writePrivate(launcherLog, new byte[0], false);
         ProcessBuilder builder = new ProcessBuilder(
                 javaPath.toString(), "-Xms64m", "-Xmx1024m", "-XX:ActiveProcessorCount=2",
                 "-Djava.io.tmpdir=" + home.resolve("tmp"), "-Dlogback.configurationFile=" + home.resolve("logback.xml"),
@@ -481,8 +481,12 @@ public final class NodeManager implements AutoCloseable {
     }
 
     private static void writePrivate(Path path, byte[] bytes) throws IOException {
+        writePrivate(path, bytes, true);
+    }
+
+    private static void writePrivate(Path path, byte[] bytes, boolean limitExistingSize) throws IOException {
         if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-            requirePrivateFile(path);
+            requirePrivateFile(path, limitExistingSize);
         }
         Path temporary = path.resolveSibling(path.getFileName() + ".new");
         if (Files.exists(temporary, LinkOption.NOFOLLOW_LINKS)) {
@@ -498,7 +502,12 @@ public final class NodeManager implements AutoCloseable {
     }
 
     private static void requirePrivateFile(Path path) throws IOException {
-        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path) || Files.size(path) > 16384) {
+        requirePrivateFile(path, true);
+    }
+
+    private static void requirePrivateFile(Path path, boolean limitSize) throws IOException {
+        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path)
+                || (limitSize && Files.size(path) > 16384)) {
             throw new IOException("Desktop settings must be regular private files");
         }
         protect(path, false);

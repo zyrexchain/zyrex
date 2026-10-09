@@ -124,6 +124,7 @@ jobs:
           if os.environ['GITHUB_REF_NAME'] != 'desktop-v' + version:
               raise ValueError('The release tag must match the desktop application version')
           PY
+          test "$(gh api "repos/$GH_REPO/commits/$GITHUB_REF_NAME" --jq '.sha')" = "$GITHUB_SHA"
           (cd artifacts/desktop && sha256sum --check SHA256SUMS-linux-amd64 && sha256sum --check SHA256SUMS-windows-amd64)
           cat artifacts/desktop/SHA256SUMS-*-amd64 > artifacts/desktop/SHA256SUMS
           gh release create "$GITHUB_REF_NAME" artifacts/desktop/* \

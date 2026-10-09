@@ -55,6 +55,7 @@ public final class BackendTests {
         sendPreservesExactAmounts();
         errorsDoNotExposeSecretsAndResponsesAreBounded();
         managedLifecycleAndSingleInstance();
+        logRestartPreservesFileSafetyAndSettingsLimits();
         orphanRecoveryStopsOnlyVerifiedProcess();
         unrelatedLiveProcessesArePreserved();
         System.out.println("Desktop backend: " + passed + " tests passed");
@@ -337,12 +338,47 @@ public final class BackendTests {
             }
             manager.stop();
             check(!manager.isRunning(), "Stop only the owned child");
+            Files.writeString(data.resolve("launcher.log"), "Previous startup diagnostic\n".repeat(2048));
+            check(Files.size(data.resolve("launcher.log")) > 16384, "The restart regression must contain a large existing log");
             manager.start();
             manager.awaitReady(Duration.ofSeconds(20));
+            check(Files.size(data.resolve("launcher.log")) == 0, "Restart truncates a large owned log before starting the child");
             check(Files.readString(data.resolve("node/preserved-data")).equals("wallet-history-marker"), "Restart preserves node data");
         }
         try (NodeManager reopened = new NodeManager(data, java, jar)) {
             check(settings.equals(Files.readString(data.resolve("desktop.json"))), "Credentials survive application restarts");
+        }
+        passed++;
+    }
+
+    private static void logRestartPreservesFileSafetyAndSettingsLimits() throws Exception {
+        Path temporary = Files.createTempDirectory("zyrex-desktop-file-safety-");
+        Path jar = fakeNodeJar(temporary);
+        Path java = Paths.get(System.getProperty("java.home"), "bin", windows() ? "java.exe" : "java");
+        Path oversized = temporary.resolve("oversized-settings");
+        try (NodeManager ignored = new NodeManager(oversized, java, jar)) {
+            Files.writeString(oversized.resolve("desktop.json"), " ".repeat(16385));
+        }
+        rejects(IOException.class, () -> new NodeManager(oversized, java, jar));
+        check(Files.size(oversized.resolve("desktop.json")) == 16385, "Reject oversized settings without rewriting them");
+        Path data = temporary.resolve("symlink-log");
+        try (NodeManager manager = new NodeManager(data, java, jar)) {
+            Path target = temporary.resolve("unrelated-file");
+            Files.writeString(target, "preserve unrelated file");
+            boolean canCreateSymlink = true;
+            try {
+                Files.createSymbolicLink(data.resolve("launcher.log"), target);
+            } catch (UnsupportedOperationException | IOException | SecurityException failure) {
+                if (!windows()) {
+                    throw failure;
+                }
+                canCreateSymlink = false;
+            }
+            if (canCreateSymlink) {
+                rejects(IOException.class, manager::start);
+                check(!manager.isRunning(), "A symlink log must be rejected before starting a child");
+                check(Files.readString(target).equals("preserve unrelated file"), "A symlink log must never truncate its target");
+            }
         }
         passed++;
     }
