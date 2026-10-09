@@ -2,6 +2,7 @@ Zyrex Desktop combines a graphical wallet and a full node in one application.
 
 This update fixes outgoing transaction history and distinguishes pending submissions from included payments.
 The Send form scrolls on smaller displays, and the window fits the available desktop area.
+The supplied Zyrex coin logo is used in the wallet header, window and native application icons.
 
 - Ubuntu 24.04 or newer: Debian installer and portable Linux x86_64 archive.
 - Windows 10 version 1903 or newer / Windows 11 x64: per-user EXE installer and portable ZIP.

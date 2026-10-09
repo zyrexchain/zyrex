@@ -7,7 +7,7 @@ import javax.swing.SwingUtilities;
 
 /** A single desktop application owns both the wallet and its local full node. */
 public final class DesktopApp {
-    public static final String VERSION = "0.1.4-testnet";
+    public static final String VERSION = "0.1.5-testnet";
 
     private DesktopApp() { }
 

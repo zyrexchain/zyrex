@@ -177,6 +177,8 @@ public final class GuiSmoke {
             report.put("integerSendValidation", true);
             report.put("compactSendScrolling", true);
             report.put("windowFitsDesktop", true);
+            report.put("displayScale", Double.toString(GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getDefaultScreenDevice().getDefaultConfiguration().getDefaultTransform().getScaleX()));
             report.put("nativeInsufficientBalanceRejected", true);
             report.put("guiRestoreSameAddress", true);
             report.put("ownedNodesStopped", true);
