@@ -43,6 +43,7 @@ public final class BackendTests {
             Runtime.getRuntime().halt(0);
         }
         exactUnitsAndJson();
+        bootstrapPathsPreserveUnicodeAndRejectMalformedInput();
         recoveryPhraseValidation();
         recoveryPhraseGenerationMatchesBip39();
         addressChecksums();
@@ -84,6 +85,19 @@ public final class BackendTests {
         rejects(IllegalArgumentException.class, () -> NodeApi.validateMnemonic(PHRASE.replace("about", "abandon")));
         rejects(IllegalArgumentException.class, () -> NodeApi.validateMnemonic(PHRASE.replace("about", "unknownword")));
         rejects(IllegalArgumentException.class, () -> NodeApi.validateMnemonic("abandon about"));
+        passed++;
+    }
+
+    private static void bootstrapPathsPreserveUnicodeAndRejectMalformedInput() throws Exception {
+        Path unicode = Paths.get(System.getProperty("java.io.tmpdir")).toAbsolutePath().resolve("wallet folder \u03a9");
+        String encoded = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(unicode.toString().getBytes(StandardCharsets.UTF_8));
+        check(encoded.chars().allMatch(character -> character < 128), "Bootstrap command arguments must be ASCII");
+        check(NodeBootstrap.decodePath(encoded).equals(unicode.normalize()), "UTF-8 bootstrap paths preserve Unicode and spaces");
+        for (String invalid : Arrays.asList("", "!", "====", "YQ", "_w")) {
+            rejects(IllegalArgumentException.class, () -> NodeBootstrap.decodePath(invalid));
+        }
+        rejects(IllegalArgumentException.class, () -> NodeBootstrap.decodePath(encoded + "="));
         passed++;
     }
 

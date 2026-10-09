@@ -25,6 +25,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Map;
@@ -121,11 +123,16 @@ public final class NodeManager implements AutoCloseable {
         writePrivate(home.resolve("logback.xml"), logging().getBytes(StandardCharsets.UTF_8));
         Path launcherLog = home.resolve("launcher.log");
         writePrivate(launcherLog, new byte[0], false);
-        ProcessBuilder builder = new ProcessBuilder(
-                javaPath.toString(), "-Xms64m", "-Xmx1024m", "-XX:ActiveProcessorCount=2",
-                "-Djava.io.tmpdir=" + home.resolve("tmp"), "-Dlogback.configurationFile=" + home.resolve("logback.xml"),
-                "-jar", nodeJar.toString(), "--testnet", "-c", home.resolve("node.conf").toString());
-        builder.directory(home.toFile()).redirectErrorStream(true).redirectOutput(launcherLog.toFile());
+        ProcessBuilder builder;
+        if (windows()) {
+            builder = windowsBootstrap();
+        } else {
+            builder = new ProcessBuilder(javaPath.toString(), "-Xms64m", "-Xmx1024m", "-XX:ActiveProcessorCount=2",
+                    "-Djava.io.tmpdir=" + home.resolve("tmp"), "-Dlogback.configurationFile=" + home.resolve("logback.xml"),
+                    "-jar", nodeJar.toString(), "--testnet", "-c", home.resolve("node.conf").toString());
+            builder.directory(home.toFile());
+        }
+        builder.redirectErrorStream(true).redirectOutput(launcherLog.toFile());
         for (String variable : Arrays.asList("DATADIR", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH")) {
             builder.environment().remove(variable);
         }
@@ -139,6 +146,36 @@ public final class NodeManager implements AutoCloseable {
             process.destroyForcibly();
             throw e;
         }
+    }
+
+    private ProcessBuilder windowsBootstrap() throws IOException {
+        Path source;
+        try {
+            source = Path.of(NodeBootstrap.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toAbsolutePath();
+        } catch (java.net.URISyntaxException | RuntimeException e) {
+            throw new IOException("The managed node bootstrap could not locate the desktop application");
+        }
+        Path directory = source.getParent();
+        String classpath = source.getFileName().toString();
+        if (!classpath.chars().allMatch(value -> value < 128)) {
+            throw new IOException("The desktop application archive must have its original ASCII filename");
+        }
+        try {
+            String relativeNode = directory.relativize(nodeJar).toString();
+            if (relativeNode.chars().allMatch(value -> value < 128)) {
+                classpath += java.io.File.pathSeparator + relativeNode;
+            }
+        } catch (IllegalArgumentException ignored) {
+            // External test fixtures may be on a different drive; the bootstrap loads them by URL.
+        }
+        List<String> command = new ArrayList<>(Arrays.asList(javaPath.toString(), "-Xms64m", "-Xmx1024m",
+                "-XX:ActiveProcessorCount=2", "-cp", classpath, NodeBootstrap.class.getName(),
+                encodedPath(home), encodedPath(nodeJar)));
+        return new ProcessBuilder(command).directory(directory.toFile());
+    }
+
+    private static String encodedPath(Path path) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(path.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     public NodeApi api() throws IOException {
