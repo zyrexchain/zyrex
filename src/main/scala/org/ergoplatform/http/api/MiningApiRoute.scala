@@ -7,9 +7,9 @@ import io.circe.syntax._
 import io.circe.Encoder
 import io.circe.Json
 import org.bouncycastle.util.encoders.Hex
-import org.ergoplatform.http.api.requests.MiningRequest
+import org.ergoplatform.http.api.requests.{MiningRequest, MiningSolutionRequest}
 import org.ergoplatform.mining.CandidateGenerator.Candidate
-import org.ergoplatform.mining.{AutolykosSolution, CandidateGenerator, ErgoMiner}
+import org.ergoplatform.mining.{CandidateGenerator, ErgoMiner, MiningSolutionSelection}
 import org.ergoplatform.modifiers.mempool.ErgoTransaction
 import org.ergoplatform.nodeView.wallet.ErgoAddressJsonEncoder
 import org.ergoplatform.settings.{ErgoSettings, RESTApiSettings}
@@ -74,13 +74,18 @@ case class MiningApiRoute(miner: ActorRef,
     }
   }
 
-  def solutionR: Route = (path("solution") & post & entity(as[AutolykosSolution])) { solution =>
+  def solutionR: Route = (path("solution") & post & entity(as[MiningSolutionRequest])) { request =>
     val result = if (ergoSettings.nodeSettings.useExternalMiner) {
-      miner.askWithStatus(solution).mapTo[Unit]
+      val command = CandidateGenerator.SubmitSolution(request.solution, request.msg)
+      miner.askWithStatus(command).mapTo[Unit]
     } else {
       Future.failed(new Exception("External miner support is inactive"))
     }
-    ApiResponse(result)
+    onComplete(result) {
+      case Success(_) => ApiResponse(())
+      case Failure(error: MiningSolutionSelection.Rejected) => BadRequest(error.getMessage)
+      case Failure(error) => ApiError(error)
+    }
   }
 
   def rewardAddressR: Route = (path("rewardAddress") & get) {

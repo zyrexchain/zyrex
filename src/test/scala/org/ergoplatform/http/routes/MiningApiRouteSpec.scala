@@ -1,5 +1,7 @@
 package org.ergoplatform.http.routes
 
+import akka.actor.{Actor, Props}
+import akka.pattern.StatusReply
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.{AuthorizationFailedRejection, Route}
 import akka.http.scaladsl.testkit.ScalatestRouteTest
@@ -8,7 +10,7 @@ import io.circe.Json
 import io.circe.syntax._
 import org.ergoplatform.http.api.MiningApiRoute
 import org.ergoplatform.http.api.requests.MiningRequest
-import org.ergoplatform.mining.AutolykosSolution
+import org.ergoplatform.mining.{AutolykosSolution, CandidateGenerator, MiningSolutionSelection}
 import org.ergoplatform.settings.ErgoSettings
 import org.ergoplatform.utils.Stubs
 import org.ergoplatform.utils.generators.ErgoCoreGenerators.genECPoint
@@ -56,6 +58,37 @@ class MiningApiRouteSpec
   it should "process external solution" in {
     Post(prefix + "/solution", solution.asJson) ~> route ~> check {
       status shouldBe StatusCodes.OK
+    }
+  }
+
+  it should "process an external solution bound to a work message" in {
+    val request = solution.asJson.deepMerge(Json.obj("msg" -> Json.fromString("00" * 32)))
+    Post(prefix + "/solution", request) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+    }
+  }
+
+  it should "reject malformed work binding before forwarding a solution" in {
+    Seq(Json.Null, Json.fromString("00" * 31), Json.fromString("gg" * 32)).foreach { msg =>
+      val request = solution.asJson.deepMerge(Json.obj("msg" -> msg))
+      Post(prefix + "/solution", request) ~> Route.seal(route) ~> check {
+        status shouldBe StatusCodes.BadRequest
+      }
+    }
+  }
+
+  it should "return HTTP 400 when requested work is stale or unknown" in {
+    val rejectedMiner = system.actorOf(Props(new Actor {
+      override def receive: Receive = {
+        case _: CandidateGenerator.SubmitSolution =>
+          sender() ! StatusReply.error(MiningSolutionSelection.Rejected("Requested work is stale or unknown"))
+      }
+    }))
+    val rejectingRoute = MiningApiRoute(rejectedMiner, localSetting).route
+    val request = solution.asJson.deepMerge(Json.obj("msg" -> Json.fromString("00" * 32)))
+    Post(prefix + "/solution", request) ~> rejectingRoute ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[Json].hcursor.downField("detail").as[String] shouldBe Right("Requested work is stale or unknown")
     }
   }
 

@@ -103,6 +103,36 @@ class CandidateGenerator(
     }
   }
 
+  private def processSolution(state: CandidateGeneratorState,
+                              preSolution: AutolykosSolution,
+                              requestedMessage: Option[Array[Byte]]): Unit = {
+    val solution = if (CryptoFacade.isInfinityPoint(preSolution.pk)) {
+      AutolykosSolution(minerPk.value, preSolution.w, preSolution.n, preSolution.d)
+    } else {
+      preSolution
+    }
+    val completed = MiningSolutionSelection.complete(
+      state.cachedCandidate, state.cachedPreviousCandidate, solution, requestedMessage,
+      ergoSettings.chainSettings.powScheme
+    )
+    val result: StatusReply[Unit] = completed match {
+      case Success(newBlock) =>
+        log.info(s"New block mined, header: ${newBlock.header}")
+        sendToNodeView(newBlock)
+        context.become(initialized(state.copy(solvedBlock = Some(newBlock))))
+        StatusReply.success(())
+      case Failure(exception) =>
+        // A stale bound job must not evict valid work belonging to another miner.
+        if (requestedMessage.isEmpty) {
+          context.become(initialized(state.copy(cachedCandidate = None, cachedPreviousCandidate = None)))
+        }
+        log.warn("Rejected external mining solution", exception)
+        StatusReply.error(exception)
+    }
+    log.info(s"Processed solution $solution with the result $result")
+    sender() ! result
+  }
+
   override def receive: Receive = {
 
     // first we need to get Readers to have some initial state to work with
@@ -245,37 +275,16 @@ class CandidateGenerator(
 
     case preSolution: AutolykosSolution
         if state.solvedBlock.isEmpty && state.cachedCandidate.nonEmpty =>
-      // Inject node pk if it is not externally set (in Autolykos 2)
-      val solution =
-        if (CryptoFacade.isInfinityPoint(preSolution.pk)) {
-          AutolykosSolution(minerPk.value, preSolution.w, preSolution.n, preSolution.d)
-        } else {
-          preSolution
-        }
-      val result: StatusReply[Unit] = {
-        val newBlock = state.cachedCandidate
-          .map(candidate => completeBlock(candidate.candidateBlock, solution))
-          .filter(block => ergoSettings.chainSettings.powScheme.validate(block.header).isSuccess)
-          .getOrElse {
-            log.info(s"Using previous candidate as a solution: " + state.cachedPreviousCandidate)
-            completeBlock(state.cachedPreviousCandidate.get.candidateBlock, solution)
-          }
-        log.info(s"New block mined, header: ${newBlock.header}")
-        ergoSettings.chainSettings.powScheme.validate(newBlock.header) match {
-          case Success(_) =>
-            sendToNodeView(newBlock)
-            context.become(initialized(state.copy(solvedBlock = Some(newBlock))))
-            StatusReply.success(())
-          case Failure(exception) =>
-            log.warn(s"Removing candidates due to invalid block", exception)
-            context.become(initialized(state.copy(cachedCandidate = None, cachedPreviousCandidate = None)))
-            StatusReply.error(
-              new Exception(s"Invalid block mined: ${exception.getMessage}", exception)
-            )
-        }
-      }
-      log.info(s"Processed solution $solution with the result $result")
-      sender() ! result
+      processSolution(state, preSolution, None)
+
+    case SubmitSolution(solution, message)
+        if state.solvedBlock.isEmpty && state.cachedCandidate.nonEmpty =>
+      processSolution(state, solution, message)
+
+    case _: SubmitSolution =>
+      sender() ! StatusReply.error(
+        MiningSolutionSelection.Rejected(s"Block already solved or no candidate cached: ${state.solvedBlock.map(_.id)}")
+      )
 
     case _: AutolykosSolution =>
       sender() ! StatusReply.error(
@@ -287,6 +296,8 @@ class CandidateGenerator(
 }
 
 object CandidateGenerator extends ScorexLogging {
+
+  case class SubmitSolution(solution: AutolykosSolution, requestedMessage: Option[Array[Byte]])
 
   /**
     * Holder for both candidate block and data for external miners derived from it

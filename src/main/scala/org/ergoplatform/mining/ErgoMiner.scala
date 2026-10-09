@@ -2,7 +2,7 @@ package org.ergoplatform.mining
 
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Props, Stash}
 import akka.pattern.StatusReply
-import org.ergoplatform.mining.CandidateGenerator.GenerateCandidate
+import org.ergoplatform.mining.CandidateGenerator.{GenerateCandidate, SubmitSolution}
 import org.ergoplatform.nodeView.state.DigestState
 import org.ergoplatform.nodeView.ErgoNodeViewHolder.ReceivableMessages.GetDataFromCurrentView
 import org.ergoplatform.modifiers.history.header.Header
@@ -175,6 +175,9 @@ class ErgoMiner(
 
     case GenerateCandidate(_, _, _, _) =>
       sender() ! StatusReply.error("Miner has not started yet")
+
+    case _: SubmitSolution =>
+      sender() ! StatusReply.error(MiningSolutionSelection.Rejected("Miner has not started yet"))
   }
 
   /** Bridge between external miner and CandidateGenerator (Internal mining threads are talking to CandidateGenerator directly.)
@@ -185,6 +188,9 @@ class ErgoMiner(
       minerState.candidateGeneratorRef forward genCandidate
 
     case solution: AutolykosSolution =>
+      minerState.candidateGeneratorRef forward solution
+
+    case solution: SubmitSolution =>
       minerState.candidateGeneratorRef forward solution
 
     case ReadMinerPk => // used in /mining/rewardAddress API method
@@ -211,7 +217,8 @@ object ErgoMiner extends ScorexLogging {
     secretKeyOpt: Option[DLogProverInput], // first secret from wallet for internal miner
     publicKey: ProveDlog, // "miningPubkeyHex" setting in config has preference over wallet's secret key,
     candidateGeneratorRef: ActorRef,
-    prepareCandidateRetryDelay: FiniteDuration = 100.millis, // duration to wait before new prepare candidate attempt (adjusted based on feedback from previous execution)
+    // Delay before the next candidate attempt, adjusted from the previous execution.
+    prepareCandidateRetryDelay: FiniteDuration = 100.millis,
     solvedBlock: Option[Header]                = None // we cache it as it is a signal for competing miners that they are too late
   )
 

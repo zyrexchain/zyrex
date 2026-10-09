@@ -304,7 +304,7 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.request(pair, "mining.submit", params))["error"][0], 21)
             self.assertEqual((await self.request(pair, "mining.submit", old_params))["error"][0], 21)
         self.assertEqual(verifier.call_count, 1)
-        self.pool.node.rpc.assert_called_once_with("/mining/solution", {"n": params[-1], "pk": PK})
+        self.pool.node.rpc.assert_called_once_with("/mining/solution", {"n": params[-1], "pk": PK, "msg": self.pool.work["msg"]})
         blocks = self.pool.ledger.blocks()
         self.assertEqual(len(blocks), 1)
         self.assertEqual(blocks[0]["height"], replacement_height + 1)
@@ -334,10 +334,119 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
                 release.set()
                 self.assertTrue((await submit)["result"])
                 self.assertEqual(self.pool.solved_height, 614399)
+                self.assertIsNone(self.pool.solution_ack_at)
+                self.assertIsNone(self.pool.solution_ack_height)
                 self.assertEqual(len(self.pool.ledger.blocks()), 1)
             finally:
                 release.set()
                 await asyncio.gather(submit, return_exceptions=True)
+
+    async def test_unapplied_native_ack_expires_only_after_fresh_synced_info_and_allows_exact_next_template(self):
+        self.pool.info = {"fullHeight": 614399, "headersHeight": 614399,
+                          "bestFullHeaderId": "a" * 64, "bestHeaderId": "a" * 64}
+        self.pool.work["b"] = (1 << 256) - 1
+        pair, prefix, job = await self.worker()
+        current = dict(self.pool.work)
+        with patch("server.hit", return_value=2):
+            first = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000001"]
+            self.assertTrue((await self.request(pair, "mining.submit", first))["result"])
+            ack = self.pool.solution_ack_at
+            self.assertIsNotNone(ack)
+            self.assertEqual(self.pool.solution_ack_height, 614400)
+            self.assertEqual(self.pool.resource_stats()["pendingSolutionAck"]["height"], 614400)
+            second = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000002"]
+            self.assertFalse(self.pool.expire_solution_ack(current, True, now=ack + 19.99))
+            self.assertEqual((await self.request(pair, "mining.submit", second))["error"][0], 21)
+            self.assertFalse(self.pool.expire_solution_ack(current, False, now=ack + 21))
+            self.pool.info["headersHeight"] += 1
+            self.assertFalse(self.pool.expire_solution_ack(current, True, now=ack + 21))
+            self.pool.info["headersHeight"] -= 1
+            self.pool.info["bestHeaderId"] = "b" * 64
+            self.assertFalse(self.pool.expire_solution_ack(current, True, now=ack + 21))
+            self.pool.info["bestHeaderId"] = "a" * 64
+            self.assertFalse(self.pool.expire_solution_ack(dict(current, h=614401), True, now=ack + 21))
+            current["msg"] = "d" * 64
+            self.assertTrue(self.pool.expire_solution_ack(current, True, now=ack + 21))
+            self.assertEqual(self.pool.solved_height, 614399)
+            self.assertIsNone(self.pool.solution_ack_at)
+            self.assertIsNone(self.pool.resource_stats()["pendingSolutionAck"])
+            client = next(iter(self.pool.clients))
+            self.assertEqual(len(client.jobs), 0)
+            self.assertFalse(self.pool.ready())
+            self.pool.work = current
+            await client.job(True)
+            while True:
+                message = json.loads(await asyncio.wait_for(pair[0].readline(), 2))
+                if message.get("method") == "mining.notify":
+                    fresh_job = message["params"]
+                    break
+            second[1] = fresh_job[0]
+            self.assertTrue((await self.request(pair, "mining.submit", second))["result"])
+            self.assertEqual((await self.request(pair, "mining.submit", second))["error"][0], 21)
+        calls = self.pool.node.rpc.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].args, ("/mining/solution", {"n": first[-1], "pk": PK, "msg": MESSAGE}))
+        self.assertEqual(calls[1].args, ("/mining/solution", {"n": second[-1], "pk": PK, "msg": "d" * 64}))
+        self.assertEqual(len(self.pool.ledger.blocks()), 2)
+        self.assertEqual(self.pool.ledger.balances(), {})
+
+    async def test_update_loop_rebroadcasts_same_work_after_fresh_expired_ack(self):
+        info = {"fullHeight": 614399, "headersHeight": 614399,
+                "bestFullHeaderId": "a" * 64, "bestHeaderId": "a" * 64}
+        self.pool.info = dict(info)
+        pair, _, previous_job = await self.worker()
+        self.pool.node.pk = PK
+        self.pool.node.ready.return_value = dict(info)
+        self.pool.node.rpc.return_value = dict(self.pool.work)
+        self.pool.config["genesisId"] = "f" * 64
+        self.pool.last_reconcile = time.monotonic()
+        self.pool.reconcile_task = None
+        self.pool.acknowledge_solution(self.pool.work["h"])
+        self.pool.solution_ack_at -= 21
+        self.pool.checked_at -= 6
+        updater = asyncio.create_task(self.pool.update())
+        try:
+            while True:
+                message = json.loads(await asyncio.wait_for(pair[0].readline(), 2))
+                if message.get("method") == "mining.notify":
+                    fresh = message["params"]
+                    break
+            self.assertNotEqual(fresh[0], previous_job[0])
+            self.assertEqual(fresh[1:3], previous_job[1:3])
+            self.assertTrue(fresh[-1])
+            self.assertEqual(self.pool.solved_height, 614399)
+            self.assertIsNone(self.pool.solution_ack_at)
+            self.pool.node.ready.assert_called_once()
+            self.pool.node.rpc.assert_called_once_with("/mining/candidate")
+            self.assertTrue(self.pool.ready())
+            self.assertEqual(self.pool.ledger.blocks(), [])
+        finally:
+            updater.cancel()
+            await asyncio.gather(updater, return_exceptions=True)
+
+    async def test_ack_expiration_does_not_release_a_manually_set_marker_without_native_ack(self):
+        self.pool.info = {"fullHeight": 614399, "headersHeight": 614399,
+                          "bestFullHeaderId": "a" * 64, "bestHeaderId": "a" * 64}
+        self.pool.solved_height = 614400
+        pair, prefix, job = await self.worker()
+        self.assertFalse(self.pool.expire_solution_ack(self.pool.work, True, now=time.monotonic() + 1000))
+        self.assertEqual(self.pool.solved_height, 614400)
+        params = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000001"]
+        self.assertEqual((await self.request(pair, "mining.submit", params))["error"][0], 21)
+        self.pool.node.rpc.assert_not_called()
+        self.assertEqual(self.pool.ledger.blocks(), [])
+
+    async def test_applied_tip_clears_pending_ack_without_unblocking_old_height(self):
+        self.pool.info = {"fullHeight": 614399, "headersHeight": 614399,
+                          "bestFullHeaderId": "a" * 64, "bestHeaderId": "a" * 64}
+        self.pool.acknowledge_solution(614400)
+        self.assertFalse(self.pool.apply_info({"fullHeight": 614400, "headersHeight": 614400,
+                                               "bestFullHeaderId": "b" * 64, "bestHeaderId": "b" * 64}))
+        self.assertIsNone(self.pool.solution_ack_at)
+        self.assertIsNone(self.pool.solution_ack_height)
+        self.assertEqual(self.pool.solved_height, 614400)
+        self.assertFalse(self.pool.expire_solution_ack(dict(self.pool.work, h=614401), True,
+                                                      now=time.monotonic() + 1000))
 
     async def test_static_difficulty_does_not_accumulate_unused_retarget_samples(self):
         self.pool.resources.limits.update({"requestBurst": 400, "shareBurst": 400})

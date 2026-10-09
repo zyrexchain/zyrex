@@ -21,6 +21,7 @@ from pow import DIFF1, MAX_TARGET, hit, validate_miner_address
 from resource_limits import Admission, DuplicateCache, ResourceBusy, TokenBucket, WorkLane, networks, proxy_identity, trusted
 
 LOG = logging.getLogger("zyrex-pool")
+SOLUTION_ACK_SECONDS = 20
 
 
 class StratumError(Exception):
@@ -201,9 +202,9 @@ class Client:
             try:
                 async with self.pool.submit_lock:
                     await self.pool.lanes["solutions"].run(
-                        self.pool.node.rpc, "/mining/solution", {"n": nonce_hex, "pk": work["pk"]})
+                        self.pool.node.rpc, "/mining/solution", {"n": nonce_hex, "pk": work["pk"], "msg": work["msg"]})
                     if params[1] in self.jobs:
-                        self.pool.solved_height = max(self.pool.solved_height, work["h"])
+                        self.pool.acknowledge_solution(work["h"])
                 LOG.info("Block submitted: height=%s worker=%s nonce=%s", work["h"], self.username, nonce_hex)
                 self.pool.refresh.set()
             except (OSError, ValueError, TimeoutError, ResourceBusy) as error:
@@ -281,6 +282,9 @@ class Pool:
 
     def ensure_resources(self):
         # Lazy initialization also keeps protocol tests independent of node/wallet credentials.
+        self.solved_height = getattr(self, "solved_height", 0)
+        self.solution_ack_at = getattr(self, "solution_ack_at", None)
+        self.solution_ack_height = getattr(self, "solution_ack_height", None)
         if hasattr(self, "resources"):
             return
         self.resources = Admission(self.config)
@@ -301,6 +305,13 @@ class Pool:
         result["proxyHeadersPending"] = self.proxy_pending
         result["duplicateCacheEntries"] = len(self.duplicates.entries)
         result["duplicateCacheRejected"] = self.duplicates.rejected
+        result["solvedHeight"] = self.solved_height
+        result["pendingSolutionAck"] = None
+        height = (getattr(self, "info", None) or {}).get("fullHeight")
+        if self.solution_ack_at is not None and type(height) is int and height < self.solution_ack_height:
+            result["pendingSolutionAck"] = {"height": self.solution_ack_height,
+                                            "ageSeconds": round(max(0, time.monotonic() - self.solution_ack_at), 2),
+                                            "timeoutSeconds": SOLUTION_ACK_SECONDS}
         result["queues"] = {name: lane.stats() for name, lane in self.lanes.items()}
         return result
 
@@ -312,7 +323,9 @@ class Pool:
 
     def apply_info(self, info):
         """Release solved-height suppression only after an observed applied branch change."""
-        previous = self.info or {}
+        self.solution_ack_at = getattr(self, "solution_ack_at", None)
+        self.solution_ack_height = getattr(self, "solution_ack_height", None)
+        previous = getattr(self, "info", None) or {}
         old_height, height = previous.get("fullHeight"), info.get("fullHeight")
         old_id, block_id = previous.get("bestFullHeaderId"), info.get("bestFullHeaderId")
         valid_heights = type(old_height) is int and type(height) is int and old_height >= 1 and height >= 1
@@ -323,8 +336,39 @@ class Pool:
             self.work = None
             for client in tuple(self.clients):
                 client.jobs.clear()
+        if changed or type(height) is int and self.solution_ack_height is not None and height >= self.solution_ack_height:
+            self.solution_ack_at = None
+            self.solution_ack_height = None
         self.info = dict(info)
         return changed
+
+    def acknowledge_solution(self, height):
+        """A native RPC acknowledgement proves PoW validation, not canonical application."""
+        if height >= self.solved_height:
+            self.solved_height = height
+            self.solution_ack_height = height
+            self.solution_ack_at = time.monotonic()
+
+    def expire_solution_ack(self, work, fresh_info, now=None):
+        """Retry a stuck native acknowledgement only against a freshly synchronized next-block template."""
+        if not fresh_info or getattr(self, "solution_ack_at", None) is None:
+            return False
+        now = time.monotonic() if now is None else now
+        info = self.info or {}
+        height, ident = info.get("fullHeight"), info.get("bestFullHeaderId")
+        synced = type(height) is int and height >= 1 and info.get("headersHeight") == height \
+            and isinstance(ident, str) and bool(ident) and info.get("bestHeaderId") == ident
+        if not synced or type(work.get("h")) is not int or work["h"] != height + 1 \
+                or work["h"] != self.solved_height or self.solution_ack_height != self.solved_height \
+                or now - self.solution_ack_at < SOLUTION_ACK_SECONDS:
+            return False
+        self.solved_height = height
+        self.solution_ack_at = None
+        self.solution_ack_height = None
+        self.work = None
+        for client in tuple(self.clients):
+            client.jobs.clear()
+        return True
 
     def ready(self):
         return self.work is not None and self.error is None and time.monotonic() - self.checked_at < 15
@@ -382,14 +426,17 @@ class Pool:
     async def update(self):
         while True:
             try:
+                fresh_info = False
                 if time.monotonic() - self.checked_at >= 5 or self.info is None:
                     self.apply_info(await self.lanes["templates"].run(self.node.ready))
                     await self.lanes["writes"].run(self.ledger.bind_network, self.config["genesisId"], self.node.pk)
                     self.checked_at = time.monotonic()
+                    fresh_info = True
                 work = await self.lanes["templates"].run(self.node.rpc, "/mining/candidate")
                 work["b"] = int(work["b"])
                 if work["pk"] != self.node.pk or len(bytes.fromhex(work["msg"])) != 32 or not 0 < work["b"] <= MAX_TARGET:
                     raise ValueError("Invalid node work template")
+                self.expire_solution_ack(work, fresh_info)
                 changed = not self.work or work["msg"] != self.work["msg"]
                 self.work = work
                 self.error = None

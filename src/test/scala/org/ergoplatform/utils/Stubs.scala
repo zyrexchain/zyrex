@@ -118,6 +118,7 @@ trait Stubs extends ErgoTestHelpers with TestFileUtils {
           sender() ! StatusReply.success(candidate)
         }
       case _: AutolykosSolution => sender() ! StatusReply.success(())
+      case _: CandidateGenerator.SubmitSolution => sender() ! StatusReply.success(())
       case ErgoMiner.ReadMinerPk => sender() ! StatusReply.success(pk)
     }
   }

@@ -704,7 +704,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         nonce = prefix + "000000000001"
         result = await self.request("mining.submit", [ADDRESS1 + ".rig", job[0], "1", "0", nonce])
         self.assertTrue(result["result"])
-        self.pool.node.rpc.assert_called_once_with("/mining/solution", {"n": nonce, "pk": PK})
+        self.pool.node.rpc.assert_called_once_with("/mining/solution", {"n": nonce, "pk": PK, "msg": MESSAGE})
         self.assertEqual(self.pool.ledger.blocks()[0]["nonce"], nonce)
         result = await self.request("mining.submit", [ADDRESS1 + ".rig", job[0], "2", "0", prefix + "000000000002"])
         self.assertEqual(result["error"][0], 21)

@@ -6,7 +6,7 @@ services:
     command: [--devnet, -c, /etc/zyrex/node.conf]
     environment:
       DATADIR: /var/lib/zyrex
-      JAVA_TOOL_OPTIONS: -Xms128m -Xmx1500m -XX:ActiveProcessorCount=2
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx1500m -XX:ActiveProcessorCount=2 ${ZYREX_PRIVATE_JAVA_OPTIONS:-}
     ports: ["127.0.0.1:19558:19555"]
     volumes:
       - poolnode:/var/lib/zyrex

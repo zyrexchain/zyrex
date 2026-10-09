@@ -5302,7 +5302,7 @@ paths:
 
   /mining/solution:
     post:
-      summary: Submit solution for current candidate
+      summary: Submit a mining solution, optionally bound to an exact cached work message
       operationId: miningSubmitSolution
       tags:
         - mining
@@ -5311,7 +5311,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PowSolutions'
+              allOf:
+                - $ref: '#/components/schemas/PowSolutions'
+                - type: object
+                  properties:
+                    msg:
+                      type: string
+                      pattern: '^[0-9a-fA-F]{64}$'
+                      description: >-
+                        Optional candidate message in hexadecimal. When supplied, only the
+                        exact cached candidate is accepted; stale or unknown work is rejected.
       responses:
         '200':
           description: Solution is valid
