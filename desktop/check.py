@@ -19,8 +19,9 @@ def main():
     tests = ROOT / 'desktop/target/desktop-tests.jar'
     if args.image is None:
         jars = [ROOT / 'desktop/target/input/desktop.jar', ROOT / 'desktop/target/input/zyrex.jar', tests]
-        subprocess.run(['java', '-Djava.awt.headless=true', '-cp', os.pathsep.join(map(str, jars)),
-                        'org.zyrexchain.desktop.BackendTests'], check=True, timeout=300)
+        for suite in ('BackendTests', 'SendLayoutTests'):
+            subprocess.run(['java', '-Djava.awt.headless=true', '-cp', os.pathsep.join(map(str, jars)),
+                            'org.zyrexchain.desktop.' + suite], check=True, timeout=300)
         return
     image = args.image.resolve(strict=True)
     windows = platform.system() == 'Windows'

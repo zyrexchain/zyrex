@@ -2,6 +2,7 @@ package org.zyrexchain.desktop;
 
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Dimension;
 import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
 import java.awt.Point;
@@ -34,6 +35,8 @@ import javax.swing.JPasswordField;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JComponent;
+import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 
@@ -115,6 +118,7 @@ public final class GuiSmoke {
             await(() -> addressCount() > previous, "native address derivation");
             NodeApi.validateAddress(readText("receive-address"));
             selectTab(2);
+            verifyCompactSend(output);
             text("send-recipient", firstAddress);
             text("send-amount", "0.000000001");
             check(Units.parse(readText("send-amount")) == 1, "One nano must retain exact precision in the send form");
@@ -171,6 +175,8 @@ public final class GuiSmoke {
             report.put("passwordKeyboardInput", true);
             report.put("passwordMaskVisible", true);
             report.put("integerSendValidation", true);
+            report.put("compactSendScrolling", true);
+            report.put("windowFitsDesktop", true);
             report.put("nativeInsufficientBalanceRejected", true);
             report.put("guiRestoreSameAddress", true);
             report.put("ownedNodesStopped", true);
@@ -213,7 +219,42 @@ public final class GuiSmoke {
             Ui.install();
             current = new WalletWindow(manager);
             current.setVisible(true);
+            Rectangle usable = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+            check(usable.contains(current.getBounds()), "The initial window must fit the available desktop area");
             current.start();
+            return null;
+        });
+    }
+
+    private static void verifyCompactSend(Path output) throws Exception {
+        Dimension original = edt(() -> current.getSize());
+        edt(() -> {
+            Rectangle usable = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+            current.setSize(Math.min(880, usable.width), Math.min(660, usable.height));
+            current.setLocationRelativeTo(null);
+            current.validate();
+            JScrollPane scroll = (JScrollPane) component("send-scroll");
+            JComponent form = (JComponent) component("send-form");
+            JComponent title = (JComponent) component("send-title");
+            check(scroll.getViewport().getViewSize().width == scroll.getViewport().getExtentSize().width,
+                "Compact Send form must track the viewport width");
+            check(title.getVisibleRect().height == title.getHeight() && title.getHeight() > 0,
+                "The Send title must remain fully visible at the top");
+            JComponent review = (JComponent) component("send-review");
+            Rectangle position = SwingUtilities.convertRectangle(review.getParent(), review.getBounds(), form);
+            form.scrollRectToVisible(position);
+            check(review.getVisibleRect().height == review.getHeight() && review.getHeight() > 0,
+                "The review action must be reachable by scrolling");
+            check(scroll.getHorizontalScrollBar().getMaximum() == scroll.getHorizontalScrollBar().getVisibleAmount(),
+                "The Send form must not require horizontal scrolling");
+            return null;
+        });
+        capture(output.resolve("send-compact.png"));
+        edt(() -> {
+            current.setSize(original);
+            current.setLocationRelativeTo(null);
+            current.validate();
+            ((JScrollPane) component("send-scroll")).getViewport().setViewPosition(new Point(0, 0));
             return null;
         });
     }

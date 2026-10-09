@@ -161,13 +161,31 @@ public final class NodeApi {
         return result;
     }
 
+    public List<Map<String, Object>> unconfirmedTransactions() throws IOException, InterruptedException {
+        List<Map<String, Object>> result = new ArrayList<>();
+        final int pageSize = 100;
+        for (int offset = 0; offset < 5000; offset += pageSize) {
+            List<Object> page = listResponse(request("/transactions/unconfirmed?offset=" + offset + "&limit=" + pageSize, null, true));
+            if (page.size() > pageSize) throw new IOException("The local node returned an oversized mempool history page");
+            for (Object item : page) result.add(objectResponse(item));
+            if (page.size() < pageSize) return result;
+        }
+        throw new IOException("The local mempool exceeds the history display limit; previous history is preserved");
+    }
+
     public String send(String address, long amount, long fee) throws IOException, InterruptedException {
         validateAddress(address);
         if (amount <= 0 || fee < Units.DEFAULT_FEE || amount > Long.MAX_VALUE - fee) {
             throw new IllegalArgumentException("Amount must be positive and the fee must be at least 0.001 ZYRX");
         }
-        Object result = request("/wallet/transaction/send",
-                Json.object("requests", Collections.singletonList(Json.object("address", address, "value", amount)), "fee", fee), true);
+        Object result;
+        try {
+            result = request("/wallet/transaction/send",
+                    Json.object("requests", Collections.singletonList(Json.object("address", address, "value", amount)), "fee", fee), true);
+        } catch (IOException failure) {
+            if (failure instanceof ApiException && ((ApiException) failure).statusCode < 500) throw failure;
+            throw new IOException("The submission result is unknown. Check wallet history before retrying; the app will not resend it", failure);
+        }
         if (!(result instanceof String) || !((String) result).matches("[0-9a-f]{64}")) {
             throw new IOException("The node did not return a valid transaction ID; check wallet history before retrying");
         }

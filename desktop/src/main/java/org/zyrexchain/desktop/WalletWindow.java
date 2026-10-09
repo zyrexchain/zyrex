@@ -11,7 +11,9 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
+import java.awt.GraphicsEnvironment;
 import java.awt.Image;
+import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.WindowAdapter;
@@ -21,10 +23,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -53,6 +53,7 @@ import javax.swing.table.DefaultTableModel;
 /** All network and node operations run outside Swing's event dispatch thread. */
 public final class WalletWindow extends JFrame implements WalletOnboarding.Host, SendPanel.Host {
     private final NodeManager manager;
+    private final WalletHistory history;
     private volatile NodeApi api;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "zyrex-desktop-node");
@@ -88,7 +89,7 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
     private final JLabel genesis = Ui.muted("—");
     private final JProgressBar chainProgress = new JProgressBar();
     private final DefaultTableModel historyRows = new DefaultTableModel(
-        new Object[] {"Transaction", "Included block", "Confirmations", "Wallet outputs · ZYRX"}, 0) {
+        new Object[] {"Transaction", "Direction", "Status", "Sent / received · ZYRX", "Fee · ZYRX", "Net change · ZYRX"}, 0) {
         @Override public boolean isCellEditable(int row, int column) { return false; }
     };
     private final JTable historyTable = new JTable(historyRows);
@@ -96,18 +97,21 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
     private volatile boolean closing;
     private volatile boolean busy;
     private boolean connected;
-    private Snapshot snapshot;
+    private volatile Snapshot snapshot;
 
     public WalletWindow(NodeManager manager) {
         super("Zyrex · Wallet & Node · Testnet");
         this.manager = manager;
+        history = new WalletHistory(manager.dataHome());
         onboarding = new WalletOnboarding(this);
         send = new SendPanel(this);
         setName("zyrex-desktop");
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-        setMinimumSize(new Dimension(880, 660));
-        setSize(1060, 810);
-        setLocationRelativeTo(null);
+        Rectangle workArea = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+        setMinimumSize(new Dimension(Math.min(680, workArea.width), Math.min(480, workArea.height)));
+        int width = Math.min(1060, workArea.width);
+        int height = Math.min(810, workArea.height);
+        setBounds(workArea.x + (workArea.width - width) / 2, workArea.y + (workArea.height - height) / 2, width, height);
         JPanel root = new JPanel(new BorderLayout());
         root.setBackground(Ui.BACKGROUND);
         root.add(header(), BorderLayout.NORTH);
@@ -311,15 +315,21 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
         historyTable.setRowHeight(35);
         historyTable.setShowVerticalLines(false);
         historyTable.setFillsViewportHeight(true);
-        historyTable.getColumnModel().getColumn(0).setPreferredWidth(460);
+        historyTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+        historyTable.getColumnModel().getColumn(0).setPreferredWidth(300);
+        historyTable.getColumnModel().getColumn(1).setPreferredWidth(105);
+        historyTable.getColumnModel().getColumn(2).setPreferredWidth(280);
+        historyTable.getColumnModel().getColumn(3).setPreferredWidth(160);
+        historyTable.getColumnModel().getColumn(4).setPreferredWidth(100);
+        historyTable.getColumnModel().getColumn(5).setPreferredWidth(160);
         historyTable.setAutoCreateRowSorter(true);
         panel.add(new JScrollPane(historyTable), BorderLayout.CENTER);
         JPanel bottom = new JPanel(new GridLayout(0, 1, 0, 9));
         bottom.setOpaque(false);
         historyNote.setName("history-status");
         bottom.add(historyNote);
-        bottom.add(Ui.paragraph("Wallet outputs show outputs to your addresses, including change. "
-            + "They are not net transfer amounts. Select a transaction to copy its full ID."));
+        bottom.add(Ui.paragraph("Sent amounts exclude change and fees. Net change includes your fee; self transfers only reduce it by the fee. "
+            + "A submitted transaction is confirmed only after inclusion in a block. Select a row to copy its full ID."));
         JButton copy = Ui.button("Copy selected transaction ID", "history-copy", false);
         copy.addActionListener(event -> {
             int selected = historyTable.getSelectedRow();
@@ -381,12 +391,20 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
             Map<String, Object> status = api.status();
             boolean initialized = Boolean.TRUE.equals(status.get("isInitialized"));
             Snapshot next = initialized
-                ? new Snapshot(info, status, api.balance(), api.balanceWithUnconfirmed(), api.addresses(), api.transactions())
-                : new Snapshot(info, status, Collections.emptyMap(), Collections.emptyMap(), Collections.emptyList(), Collections.emptyList());
+                ? walletSnapshot(info, status)
+                : new Snapshot(info, status, Collections.emptyMap(), Collections.emptyMap(), Collections.emptyList(), WalletHistory.View.empty());
             SwingUtilities.invokeLater(() -> apply(next));
         } catch (Exception failure) {
             SwingUtilities.invokeLater(() -> connectionFailed(failure));
         }
+    }
+
+    private Snapshot walletSnapshot(Map<String, Object> info, Map<String, Object> status) throws Exception {
+        Map<String, Object> balance = api.balance();
+        Map<String, Object> unconfirmed = api.balanceWithUnconfirmed();
+        List<String> own = api.addresses();
+        WalletHistory.View previous = snapshot == null ? WalletHistory.View.empty() : snapshot.history;
+        return new Snapshot(info, status, balance, unconfirmed, own, history.refresh(api, own, previous));
     }
 
     private void apply(Snapshot next) {
@@ -473,27 +491,14 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
     }
 
     private void updateHistory(Snapshot next) {
-        Set<String> own = new HashSet<>(next.addresses);
         historyRows.setRowCount(0);
-        for (Map<String, Object> transaction : next.transactions) {
-            long ownOutputs = 0;
-            Object outputs = transaction.get("outputs");
-            if (outputs instanceof List) {
-                for (Object entry : (List<?>) outputs) {
-                    if (entry instanceof Map) {
-                        Map<?, ?> output = (Map<?, ?>) entry;
-                        if (own.contains(output.get("address")) && output.get("value") instanceof Number) {
-                            ownOutputs = Math.addExact(ownOutputs, ((Number) output.get("value")).longValue());
-                        }
-                    }
-                }
-            }
-            int included = number(transaction, "inclusionHeight");
-            historyRows.addRow(new Object[] {string(transaction, "id"), included >= 0 ? Integer.toString(included) : "Pending",
-                number(transaction, "numConfirmations"), Units.format(ownOutputs)});
+        for (WalletHistory.Row transaction : next.history.rows) {
+            historyRows.addRow(transaction.cells());
+            send.updateTransactionStatus(transaction.id, transaction.sendStatus, transaction.included);
         }
-        historyNote.setText(next.transactions.isEmpty() ? "No wallet transactions yet."
-            : next.transactions.size() + " wallet transaction" + (next.transactions.size() == 1 ? "" : "s"));
+        String warning = next.history.warning.isEmpty() ? history.warning() : next.history.warning;
+        historyNote.setText(!warning.isEmpty() ? warning : next.history.rows.isEmpty() ? "No wallet transactions yet."
+            : next.history.rows.size() + " wallet transaction" + (next.history.rows.size() == 1 ? "" : "s"));
     }
 
     @Override public void create(Consumer<String> showPhrase) {
@@ -568,7 +573,17 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
         int answer = JOptionPane.showOptionDialog(this, details, "Confirm transaction", JOptionPane.OK_CANCEL_OPTION,
             JOptionPane.PLAIN_MESSAGE, null, new Object[] {"Send ZYRX", "Cancel"}, "Cancel");
         if (answer != 0) return;
-        action("Signing and submitting your transaction…", () -> api.send(address, amount, fee), success);
+        String walletAddress = snapshot.addresses.get(0);
+        action("Signing and submitting your transaction…", () -> {
+            String id = api.send(address, amount, fee);
+            history.record(id, walletAddress, address, amount, fee);
+            return id;
+        }, id -> {
+            success.accept(id);
+            WalletHistory.Row submitted = history.submittedRow(id, snapshot.addresses);
+            if (submitted != null && snapshot.history.rows.stream().noneMatch(row -> row.id.equals(id))) snapshot.history.rows.add(0, submitted);
+            updateHistory(snapshot);
+        });
     }
 
     private <T> void action(String description, Callable<T> work, Consumer<T> success) {
@@ -609,6 +624,7 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
             : "Your node stopped. Retry startup to continue with the same wallet and chain data.");
         notice.setForeground(Ui.WARNING);
         nodeState.setText(manager.isRunning() ? "Reconnecting" : "Stopped");
+        if (snapshot != null && snapshot.initialized()) historyNote.setText("History refresh unavailable. Last successful history is preserved.");
         startupText.setText("Your wallet data is preserved. " + friendly(failure));
         retry.setVisible(!manager.isRunning());
         setActivity(manager.isRunning());
@@ -757,16 +773,16 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
         final Map<String, Object> balance;
         final Map<String, Object> withUnconfirmed;
         final List<String> addresses;
-        final List<Map<String, Object>> transactions;
+        final WalletHistory.View history;
 
         Snapshot(Map<String, Object> info, Map<String, Object> status, Map<String, Object> balance,
-                Map<String, Object> withUnconfirmed, List<String> addresses, List<Map<String, Object>> transactions) {
+                Map<String, Object> withUnconfirmed, List<String> addresses, WalletHistory.View history) {
             this.info = info;
             this.status = status;
             this.balance = balance;
             this.withUnconfirmed = withUnconfirmed;
             this.addresses = addresses;
-            this.transactions = transactions;
+            this.history = history;
         }
 
         boolean initialized() { return Boolean.TRUE.equals(status.get("isInitialized")); }

@@ -54,6 +54,9 @@ public final class BackendTests {
         unlockHandlesNativeAutomaticUnlockRace();
         wrongUnlockPasswordRemainsRejected();
         sendPreservesExactAmounts();
+        historyUsesNativePaginationAndKeepsSubmissionsOnFailure();
+        historySeparatesTransfersChangeAndConfirmation();
+        submissionHistoryIsPrivateBoundedAndPinned();
         errorsDoNotExposeSecretsAndResponsesAreBounded();
         managedLifecycleAndSingleInstance();
         logRestartPreservesFileSafetyAndSettingsLimits();
@@ -318,6 +321,160 @@ public final class BackendTests {
             rejects(IOException.class, new NodeApi(server.port(), KEY, () -> true)::info);
         }
         passed++;
+    }
+
+    private static void historyUsesNativePaginationAndKeepsSubmissionsOnFailure() throws Exception {
+        AtomicInteger pages = new AtomicInteger();
+        AtomicInteger broadcasts = new AtomicInteger();
+        WalletHistory history = new WalletHistory(Files.createTempDirectory("zyrex-history-transport-"));
+        String txId = "a".repeat(64);
+        history.record(txId, ADDRESS, ADDRESS, 1, Units.DEFAULT_FEE);
+        try (TestServer server = new TestServer(exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if (path.equals("/info")) { reply(exchange, 200, infoJson("test")); return; }
+            check(KEY.equals(exchange.getRequestHeaders().getFirst("api_key")), "History uses the verified private transport");
+            if (path.equals("/wallet/transactions")) {
+                check(exchange.getRequestURI().getQuery() == null, "Registry history has no pagination or pending switch");
+                reply(exchange, 200, "[]");
+            } else if (path.equals("/transactions/unconfirmed")) {
+                int page = pages.getAndIncrement();
+                check(exchange.getRequestURI().getQuery().equals("offset=" + page * 100 + "&limit=100"), "Actual native mempool pagination");
+                reply(exchange, 200, Json.stringify(java.util.Collections.nCopies(page == 0 ? 100 : 1, Json.object("id", txId))));
+            } else if (path.equals("/wallet/transaction/send")) {
+                broadcasts.incrementAndGet();
+                reply(exchange, 503, "{}");
+            } else throw new AssertionError("Unexpected history request");
+        })) {
+            NodeApi api = new NodeApi(server.port(), KEY, () -> true);
+            check(api.transactions().isEmpty(), "Native confirmed registry reads remain separate");
+            check(api.unconfirmedTransactions().size() == 101 && pages.get() == 2, "A default 50-row page cannot hide pending transactions");
+            try {
+                api.send(ADDRESS, 1, Units.DEFAULT_FEE);
+                throw new AssertionError("Ambiguous broadcasts must report uncertainty");
+            } catch (IOException failure) {
+                check(failure.getMessage().contains("unknown") && failure.getMessage().contains("before retrying"),
+                        "An ambiguous send must direct the user to history");
+            }
+            check(broadcasts.get() == 1, "An ambiguous broadcast is never retried automatically");
+        }
+        try (TestServer server = new TestServer(exchange -> {
+            if (exchange.getRequestURI().getPath().equals("/info")) reply(exchange, 200, infoJson("test"));
+            else reply(exchange, 503, "{}");
+        })) {
+            NodeApi api = new NodeApi(server.port(), KEY, () -> true);
+            rejects(IOException.class, api::unconfirmedTransactions);
+            WalletHistory.View last = new WalletHistory.View(history.rows(List.of(), List.of(), List.of(ADDRESS)), "");
+            WalletHistory.View failed = history.refresh(api, List.of(ADDRESS), last);
+            check(failed.rows.size() == 1 && failed.rows.get(0).id.equals(txId) && !failed.warning.isEmpty(),
+                    "A failed history refresh preserves existing rows and reports that they are stale");
+            WalletHistory.View reopened = history.refresh(api, List.of(ADDRESS), WalletHistory.View.empty());
+            check(reopened.rows.size() == 1, "Saved submissions remain visible if history is unavailable after restart");
+        }
+        check(history.rows(List.of(), List.of(), List.of(ADDRESS)).get(0).id.equals(txId), "Transport failures cannot erase submitted IDs");
+        passed++;
+    }
+
+    private static void historySeparatesTransfersChangeAndConfirmation() throws Exception {
+        WalletHistory history = new WalletHistory(Files.createTempDirectory("zyrex-history-amounts-"));
+        String incomingId = "1".repeat(64);
+        String outgoingId = "2".repeat(64);
+        String internalId = "3".repeat(64);
+        String ownedBox = "4".repeat(64);
+        String changeBox = "5".repeat(64);
+        long amount = 9_007_199_254_740_993L;
+        long fee = Units.DEFAULT_FEE;
+        long change = 8_000_000_001L;
+        Map<String, Object> incoming = historyTx(incomingId, 8, List.of(),
+                List.of(historyBox(ownedBox, ADDRESS, amount + fee + change, "owned")));
+        Map<String, Object> outgoing = historyTx(outgoingId, 10, List.of(Json.object("boxId", ownedBox)), List.of(
+                historyBox("6".repeat(64), "external", amount, "external"),
+                historyBox(changeBox, ADDRESS, change, "owned"),
+                historyBox("7".repeat(64), "fee", fee, WalletHistory.feeTree())));
+        Map<String, Object> pending = Json.object("id", outgoingId, "inputs", outgoing.get("inputs"), "outputs", outgoing.get("outputs"));
+        List<WalletHistory.Row> rows = history.rows(List.of(incoming), List.of(pending, pending), List.of(ADDRESS));
+        WalletHistory.Row sent = historyRow(rows, outgoingId);
+        check(rows.size() == 2 && sent.direction.equals("Sent") && !sent.included, "Pending outgoing duplicates produce one unconfirmed row");
+        check(sent.amount.equals(Units.format(amount)) && sent.fee.equals("0.001"), "Sent amount and fee preserve every nano above 2^53");
+        check(sent.net.equals(Units.format(-amount - fee)), "Outgoing change is excluded from sent amount and included in net accounting");
+        rows = history.rows(List.of(incoming, outgoing), List.of(pending, pending), List.of(ADDRESS));
+        sent = historyRow(rows, outgoingId);
+        check(rows.size() == 2 && sent.included && sent.confirmations == 1 && sent.status.contains("block 10"),
+                "Confirmed registry provenance wins duplicates even when the native confirmation count is zero");
+        check(sent.sendStatus.startsWith("Included in block 10"), "Send status follows actual block inclusion");
+        WalletHistory.Row received = historyRow(rows, incomingId);
+        check(received.direction.equals("Received") && received.amount.equals(Units.format(amount + fee + change))
+                && received.net.startsWith("+") && received.fee.equals("—"), "Receipts show exact owned outputs without charging someone else's fee");
+        Map<String, Object> internal = historyTx(internalId, 11, List.of(Json.object("boxId", changeBox)), List.of(
+                historyBox("8".repeat(64), ADDRESS, change - fee, "owned"),
+                historyBox("9".repeat(64), "fee", fee, WalletHistory.feeTree())));
+        WalletHistory.Row self = historyRow(history.rows(List.of(incoming, outgoing, internal), List.of(), List.of(ADDRESS)), internalId);
+        check(self.direction.equals("Self transfer") && self.amount.equals("—") && self.net.equals("-0.001"),
+                "An internal transfer never double-counts its amount as wallet income or expenditure");
+        WalletHistory recovered = new WalletHistory(Files.createTempDirectory("zyrex-history-recovered-"));
+        check(historyRow(recovered.rows(List.of(incoming, outgoing), List.of(), List.of(ADDRESS)), outgoingId).amount.equals(Units.format(amount)),
+                "Recovered native history explains outgoing transfers without a local submission record");
+        history.record(outgoingId, ADDRESS, ADDRESS, 1, Units.DEFAULT_FEE);
+        WalletHistory.Row contradictory = historyRow(history.rows(List.of(outgoing), List.of(), List.of(ADDRESS)), outgoingId);
+        check(contradictory.included && contradictory.direction.equals("Wallet activity") && contradictory.amount.equals("—")
+                && contradictory.net.equals("—"), "Saved claims cannot override contradictory native transaction outputs");
+        Map<String, Object> unknown = historyTx("f".repeat(64), 12, List.of(),
+                List.of(historyBox("0".repeat(64), "unknown script", 1000, "unknown")));
+        WalletHistory.Row unknownActivity = historyRow(history.rows(List.of(unknown), List.of(), List.of(ADDRESS)), "f".repeat(64));
+        check(unknownActivity.direction.equals("Wallet activity") && unknownActivity.net.equals("—"),
+                "A native scan record with no resolved owned boxes is never mislabeled as a zero-value receipt");
+        String script = org.ergoplatform.ZyrexAddressEncoder.apply((byte) 64).fromString(ADDRESS).get().script().bytesHex();
+        Map<String, Object> mempoolReceipt = Json.object("id", "b".repeat(64), "inputs", List.of(),
+                "outputs", List.of(historyBox("c".repeat(64), null, 1, script)));
+        WalletHistory.Row receipt = historyRow(history.rows(List.of(), List.of(mempoolReceipt), List.of(ADDRESS)), "b".repeat(64));
+        check(receipt.amount.equals("0.000000001") && receipt.direction.equals("Received") && !receipt.included,
+                "Raw native mempool boxes are recognized by the owned address script when address fields are absent");
+        passed++;
+    }
+
+    private static void submissionHistoryIsPrivateBoundedAndPinned() throws Exception {
+        Path home = Files.createTempDirectory("zyrex-history-storage-");
+        WalletHistory history = new WalletHistory(home);
+        String id = "d".repeat(64);
+        check(history.record(id, ADDRESS, ADDRESS, 1, Units.DEFAULT_FEE).isEmpty(), "Acknowledged submissions persist successfully");
+        WalletHistory.Row row = new WalletHistory(home).rows(List.of(), List.of(), List.of(ADDRESS)).get(0);
+        check(!row.included && row.status.contains("inclusion not found") && row.net.equals("-0.001"),
+                "A restart preserves a submitted self transfer without inventing confirmation or a mempool observation");
+        Path file = home.resolve("submitted-transactions.json");
+        Map<String, Object> stored = Json.asObject(Json.parse(Files.readString(file)));
+        check(Json.asObject(Json.asList(stored.get("submissions")).get(0)).keySet().equals(
+                java.util.Set.of("id", "wallet", "recipient", "amount", "fee", "submittedAt")),
+                "Metadata contains no seed, password or raw signed transaction");
+        if (!windows()) check(Files.getPosixFilePermissions(file).equals(PosixFilePermissions.fromString("rw-------")), "Private submission metadata");
+        Path copied = Files.createTempDirectory("zyrex-history-pin-");
+        Files.copy(file, copied.resolve(file.getFileName()));
+        WalletHistory foreign = new WalletHistory(copied);
+        check(foreign.rows(List.of(), List.of(), List.of(ADDRESS)).isEmpty() && !foreign.warning().isEmpty(),
+                "Copied submission metadata cannot cross application data homes");
+        String preserved = Files.readString(copied.resolve(file.getFileName()));
+        foreign.record("e".repeat(64), ADDRESS, ADDRESS, 1, Units.DEFAULT_FEE);
+        check(Files.readString(copied.resolve(file.getFileName())).equals(preserved), "A pin mismatch never rewrites the saved file");
+        stored.put("genesis", "0".repeat(64));
+        Files.writeString(file, Json.stringify(stored));
+        WalletHistory wrongChain = new WalletHistory(home);
+        check(wrongChain.rows(List.of(), List.of(), List.of(ADDRESS)).isEmpty(), "Saved submissions are pinned to the public testnet genesis");
+        Path bounded = Files.createTempDirectory("zyrex-history-bounded-");
+        WalletHistory many = new WalletHistory(bounded);
+        for (int index = 0; index < 251; index++) many.record(String.format("%064x", index), ADDRESS, ADDRESS, 1, Units.DEFAULT_FEE);
+        List<WalletHistory.Row> latest = new WalletHistory(bounded).rows(List.of(), List.of(), List.of(ADDRESS));
+        check(latest.size() == 250 && latest.stream().noneMatch(item -> item.id.equals("0".repeat(64))), "Local submission metadata is bounded");
+        passed++;
+    }
+
+    private static Map<String, Object> historyTx(String id, int height, List<Object> inputs, List<Object> outputs) {
+        return Json.object("id", id, "inclusionHeight", height, "numConfirmations", 0, "inputs", inputs, "outputs", outputs);
+    }
+
+    private static Map<String, Object> historyBox(String id, String address, long value, String script) {
+        return Json.object("boxId", id, "address", address, "value", value, "ergoTree", script);
+    }
+
+    private static WalletHistory.Row historyRow(List<WalletHistory.Row> rows, String id) {
+        return rows.stream().filter(row -> row.id.equals(id)).findFirst().orElseThrow(() -> new AssertionError("Missing history ID"));
     }
 
     private static void managedLifecycleAndSingleInstance() throws Exception {
