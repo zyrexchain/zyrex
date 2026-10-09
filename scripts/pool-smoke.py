@@ -9,7 +9,6 @@ import collections
 import concurrent.futures
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
@@ -54,8 +53,6 @@ def source_evidence():
     jar = root / "target/scala-2.12/zyrex.jar"
     return {"sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
             "sourceTreeDirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True)),
-            "privateBlockIntervalOverride": "2s" if "-Dzyrex.chain.blockInterval=2s" in
-                os.environ.get("ZYREX_PRIVATE_JAVA_OPTIONS", "").split() else None,
             "nativeJarSha256": hashlib.sha256(jar.read_bytes()).hexdigest() if jar.exists() else None}
 
 

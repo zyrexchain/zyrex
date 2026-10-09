@@ -9,9 +9,7 @@ permissions:
 jobs:
   consensus:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    env:
-      ZYREX_PRIVATE_JAVA_OPTIONS: -Dzyrex.chain.blockInterval=2s
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -54,7 +52,7 @@ jobs:
           ZYREX_POOL_BIND_IP: 127.0.0.1
         run: scripts/pool-up
       - name: Real Stratum proof search and confirmed payments to two miners
-        run: python3 scripts/pool-smoke.py --host 127.0.0.1 --restart
+        run: python3 scripts/pool-smoke.py --host 127.0.0.1 --restart --timeout 1800
       - name: Preserve source-bound native payment and pool integration evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

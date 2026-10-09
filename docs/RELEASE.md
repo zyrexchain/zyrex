@@ -6,12 +6,12 @@ consensus regressions, and preserve source-bound bootstrap and DAA evidence.
 Checksums identify the exact artifacts; they are not a complete security audit
 or a claim of byte-identical builds on arbitrary toolchains.
 
-Private CI uses a disposable four-node network with a two-second target to
-exercise confirmed transfers, pool payments and restarts within a bounded job.
-Its reward and transaction confirmation depths are unchanged. This accelerated
-timing is recorded in the integration evidence and does not validate public DAA
-reaction at the sixty-second target. Source-profile DAA tests and public bootstrap
-verification run separately with their original network settings.
+Private CI uses a disposable four-node network with its native sixty-second
+target. The pool check allows thirty minutes for proof search, competition with
+the native miner, reward maturity and confirmed payments to both receiving
+wallets. Confirmation depths and native startup guards are unchanged. Failure
+artifacts preserve public accounting state rather than reporting shares as
+successful payments. Public DAA evidence and bootstrap run separately.
 
 The network is experimental and may reset. Test coins have no monetary value,
 guaranteed mainnet conversion or recovery guarantee. Use separate test-wallet

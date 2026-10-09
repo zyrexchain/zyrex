@@ -95,7 +95,7 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 55
     permissions:
       contents: write
       actions: read
@@ -113,7 +113,7 @@ jobs:
           import json, os, subprocess, time
           endpoint = 'repos/'+os.environ['GH_REPO']+'/actions/workflows/zyrex-private.yml/runs'
           endpoint += '?head_sha='+os.environ['GITHUB_SHA']+'&event=push&per_page=50'
-          deadline = time.monotonic()+1800
+          deadline = time.monotonic()+3000
           while time.monotonic() < deadline:
               result = json.loads(subprocess.check_output(['gh','api',endpoint],text=True))
               runs = result['workflow_runs']
