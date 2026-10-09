@@ -149,6 +149,16 @@ public final class NodeManager implements AutoCloseable {
     }
 
     private ProcessBuilder windowsBootstrap() throws IOException {
+        Path helper = packagedNodeLauncher();
+        if (helper != null) {
+            ProcessBuilder builder = new ProcessBuilder(helper.toString(), encodedPath(home), encodedPath(nodeJar)).directory(home.toFile());
+            Map<String, String> environment = builder.environment();
+            String pathKey = environment.keySet().stream().filter(key -> key.equalsIgnoreCase("PATH")).findFirst().orElse("PATH");
+            String original = environment.getOrDefault(pathKey, "");
+            String applicationDirectory = helper.getParent().resolve("app").toString();
+            environment.put(pathKey, applicationDirectory + (original.isEmpty() ? "" : ";" + original));
+            return builder;
+        }
         Path source;
         try {
             source = Path.of(NodeBootstrap.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toAbsolutePath();
@@ -176,6 +186,18 @@ public final class NodeManager implements AutoCloseable {
 
     private static String encodedPath(Path path) {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(path.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    private Path packagedNodeLauncher() {
+        if (!windows() || javaPath.getNameCount() < 4) {
+            return null;
+        }
+        Path image = javaPath.getParent().getParent().getParent();
+        if (!javaPath.equals(image.resolve("runtime/bin/java.exe")) || !nodeJar.equals(image.resolve("app/zyrex.jar"))) {
+            return null;
+        }
+        Path helper = image.resolve("ZyrexNode.exe");
+        return Files.isRegularFile(helper, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(helper) ? helper : null;
     }
 
     public NodeApi api() throws IOException {
@@ -316,12 +338,19 @@ public final class NodeManager implements AutoCloseable {
         boolean verified = identity.startInstant().isPresent() && identity.command().isPresent();
         if (verified) {
             try {
-                verified = Files.isSameFile(Paths.get(identity.command().get()), javaPath);
+                Path command = Paths.get(identity.command().get());
+                Path helper = packagedNodeLauncher();
+                boolean helperCommand = helper != null && Files.isSameFile(command, helper);
+                verified = helperCommand || Files.isSameFile(command, javaPath);
                 if (identity.arguments().isPresent()) {
                     List<String> args = Arrays.asList(identity.arguments().get());
-                    verified = verified && containsPair(args, "-jar", nodeJar.toString())
-                            && containsPair(args, "-c", home.resolve("node.conf").toString())
-                            && args.contains("--testnet") && args.contains("-Djava.io.tmpdir=" + home.resolve("tmp"));
+                    if (helperCommand) {
+                        verified = verified && args.equals(Arrays.asList(encodedPath(home), encodedPath(nodeJar)));
+                    } else {
+                        verified = verified && containsPair(args, "-jar", nodeJar.toString())
+                                && containsPair(args, "-c", home.resolve("node.conf").toString())
+                                && args.contains("--testnet") && args.contains("-Djava.io.tmpdir=" + home.resolve("tmp"));
+                    }
                 } else {
                     verified = verified && windowsFallback && windowsOwnsSocket(pid, port);
                 }

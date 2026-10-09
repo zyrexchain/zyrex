@@ -12,11 +12,14 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import xml.etree.ElementTree as ElementTree
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
 MAIN_CLASS = "org.zyrexchain.desktop.DesktopApp"
+NODE_CLASS = "org.zyrexchain.desktop.NodeBootstrap"
+NODE_JAVA_OPTIONS = ("-Xms64m", "-Xmx1024m", "-XX:ActiveProcessorCount=2", "-Dfile.encoding=UTF-8")
 WINDOWS_UPGRADE_ID = "e32dbad8-4673-4c11-a475-c90a5a5962ad"
 
 
@@ -124,7 +127,35 @@ def verify_image(image, operating_system):
     configuration = (application / "Zyrex.cfg").read_text(encoding="utf-8")
     if MAIN_CLASS not in configuration or "desktop.jar" not in configuration or "zyrex.jar" not in configuration:
         raise ValueError("The generated launcher must include both application JARs on its class path")
+    if operating_system == "windows":
+        regular_file(image / "ZyrexNode.exe")
+        helper = regular_file(application / "ZyrexNode.cfg").read_text(encoding="utf-8")
+        lines = [re.sub(r"/+", "/", line.replace("\\", "/")) for line in helper.splitlines()]
+        expected = {"app.mainclass=" + NODE_CLASS, "app.classpath=$APPDIR/desktop.jar",
+                    "app.classpath=$APPDIR/zyrex.jar", *("java-options=" + value for value in NODE_JAVA_OPTIONS)}
+        if not expected.issubset(lines):
+            raise ValueError("The internal node launcher must use its bundled JARs and bounded JVM settings")
+        for option in ("-Xms", "-Xmx", "-XX:ActiveProcessorCount=", "-Dfile.encoding="):
+            if sum(line.startswith("java-options=" + option) for line in lines) != 1:
+                raise ValueError("The internal node launcher has conflicting JVM settings")
+        metadata = ElementTree.parse(regular_file(application / ".jpackage.xml")).getroot()
+        helpers = [item for item in metadata.findall("add-launcher") if item.get("name") == "ZyrexNode"]
+        if len(helpers) != 1 or any(helpers[0].get(flag) != "false" for flag in ("shortcut", "menu", "service")):
+            raise ValueError("The internal node launcher must not create shortcuts, menu entries or services")
     return launcher
+
+
+def windows_node_launcher(temporary, staged):
+    with zipfile.ZipFile(staged / "desktop.jar") as archive:
+        if NODE_CLASS.replace(".", "/") + ".class" not in archive.namelist():
+            raise ValueError("The desktop application is missing its internal node bootstrap")
+    properties = temporary / "ZyrexNode.properties"
+    properties.write_text("main-jar=desktop.jar\nmain-class=" + NODE_CLASS + "\n"
+                          "description=Zyrex internal node process\n"
+                          "java-options=" + " ".join(NODE_JAVA_OPTIONS) + "\n"
+                          "win-console=false\nwin-shortcut=false\nwin-menu=false\nlauncher-as-service=false\n",
+                          encoding="ascii")
+    return ["--add-launcher", "ZyrexNode=" + str(properties)]
 
 
 def portable_archive(image, destination, operating_system):
@@ -210,10 +241,11 @@ def main():
         temporary = Path(temporary)
         staged = temporary / "input"
         stage_inputs(args.input, staged)
+        extra_launchers = windows_node_launcher(temporary, staged) if host == "windows" else []
         run(common + ["--type", "app-image", "--input", staged, "--main-jar", "desktop.jar",
                       "--main-class", MAIN_CLASS, "--runtime-image", args.runtime, "--dest", image_parent,
                       "--icon", args.icon, "--java-options", "-Xms32m", "--java-options", "-Xmx256m",
-                      "--java-options", "-Dfile.encoding=UTF-8"])
+                      "--java-options", "-Dfile.encoding=UTF-8"] + extra_launchers)
         launcher = verify_image(image, host)
         installer_directory = temporary / "installer"
         installer_directory.mkdir()

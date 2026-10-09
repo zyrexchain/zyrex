@@ -16,6 +16,8 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -49,6 +51,20 @@ public final class GuiSmoke {
         Path nodeJar = Path.of(args[3]);
         Files.createDirectories(home);
         Files.createDirectories(output);
+        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
+            Path image = nodeJar.getParent().getParent();
+            Path copied = output.resolve("application folder \u03a9");
+            copyImage(image, copied);
+            Process version = new ProcessBuilder(copied.resolve("Zyrex.exe").toString(), "--version")
+                .redirectErrorStream(true).redirectOutput(output.resolve("launcher-version.txt").toFile()).start();
+            if (!version.waitFor(30, TimeUnit.SECONDS)) {
+                version.destroyForcibly();
+                throw new AssertionError("The installed launcher must run from a Unicode application directory");
+            }
+            check(version.exitValue() == 0, "The Unicode application launcher must exit successfully");
+            java = copied.resolve("runtime/bin/java.exe");
+            nodeJar = copied.resolve("app/zyrex.jar");
+        }
         NodeManager createManager = null;
         NodeManager restoreManager = null;
         char[] ephemeralPhrase = null;
@@ -168,6 +184,19 @@ public final class GuiSmoke {
         Path home = root.resolve(name + " wallet \u03a9");
         if (Files.exists(home)) throw new IOException("GUI tests require fresh isolated data directories; existing data is never reset");
         return home;
+    }
+
+    private static void copyImage(Path source, Path target) throws IOException {
+        if (Files.exists(target)) throw new IOException("The GUI check must not replace an existing application directory");
+        try (java.util.stream.Stream<Path> paths = Files.walk(source)) {
+            for (Path original : (Iterable<Path>) paths::iterator) {
+                if (Files.isSymbolicLink(original)) throw new IOException("Windows packaging checks require regular bundled files");
+                Path destination = target.resolve(source.relativize(original));
+                if (Files.isDirectory(original)) Files.createDirectory(destination);
+                else if (Files.isRegularFile(original)) Files.copy(original, destination);
+                else throw new IOException("Unexpected application image entry");
+            }
+        }
     }
 
     private static void open(NodeManager manager) throws Exception {
