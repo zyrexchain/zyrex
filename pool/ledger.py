@@ -4,10 +4,25 @@ import sqlite3
 import time
 import threading
 from functools import wraps
+from pathlib import Path
 from pow import address_bytes
 
 MAX_NANO = (1 << 63) - 1
 FEE_POLICY = "actual-transaction-v1"
+HASHRATE_WINDOW = 600
+
+
+class ExactSum:
+    """Keep lifetime amounts and share weights outside SQLite's signed-int64 sum."""
+    def __init__(self):
+        self.total = 0
+
+    def step(self, value):
+        if value is not None:
+            self.total += int(value)
+
+    def finalize(self):
+        return str(self.total)
 
 
 def positive_nano(value):
@@ -37,11 +52,34 @@ def synchronized(method):
     return call
 
 
+def read_snapshot(method):
+    """Give public accounting reads a consistent WAL snapshot without holding the writer lock."""
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        if self.filename == ":memory:":
+            with self.lock:
+                return method(self, *args, **kwargs)
+        db = sqlite3.connect(Path(self.filename).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            db.row_factory = sqlite3.Row
+            db.create_aggregate("exact_sum", 1, ExactSum)
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            view = object.__new__(type(self))
+            view.db = db
+            return method(view, *args, **kwargs)
+        finally:
+            db.close()
+    return call
+
+
 class Ledger:
     def __init__(self, filename):
+        self.filename = filename
         self.lock = threading.RLock()
         self.db = sqlite3.connect(filename, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        self.db.create_aggregate("exact_sum", 1, ExactSum)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript("""
@@ -67,6 +105,11 @@ class Ledger:
                 policy TEXT NOT NULL, address TEXT NOT NULL, amount INTEGER NOT NULL,
                 details TEXT NOT NULL, PRIMARY KEY(policy,address));
             CREATE INDEX IF NOT EXISTS shares_created ON shares(created);
+            CREATE INDEX IF NOT EXISTS shares_address_worker ON shares(address,worker,created);
+            CREATE INDEX IF NOT EXISTS shares_round_address ON shares(round,address,id);
+            CREATE INDEX IF NOT EXISTS credits_address ON credits(address,block);
+            CREATE INDEX IF NOT EXISTS fee_adjustments_address ON fee_adjustments(address);
+            CREATE INDEX IF NOT EXISTS payouts_created ON payouts(created);
         """)
         # Additive schema upgrade: historical signed payments and credits are immutable.
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(payouts)")}
@@ -299,6 +342,146 @@ class Ledger:
     def payout_status(self, txid, status):
         with self.db:
             self.db.execute("UPDATE payouts SET status=? WHERE id=?", (status, txid))
+
+    @staticmethod
+    def _miner_payout_join():
+        # Parameterized JSON keys select only this recipient, including batched payments.
+        return """FROM payouts p JOIN json_each(p.amounts) n ON n.key=?
+            LEFT JOIN json_each(p.gross) g ON g.key=n.key
+            LEFT JOIN json_each(p.fees) f ON f.key=n.key"""
+
+    @staticmethod
+    def _payment_totals(rows):
+        count = sum(row["count"] for row in rows)
+        legacy_count = sum(row["legacyCount"] for row in rows)
+        known_gross = sum(int(row["knownGross"]) for row in rows)
+        known_fee = sum(int(row["knownFee"]) for row in rows)
+        return {"count": count, "netNanoZYRX": str(sum(int(row["net"]) for row in rows)),
+                "grossNanoZYRX": None if legacy_count else str(known_gross),
+                "feeNanoZYRX": None if legacy_count else str(known_fee),
+                "knownGrossNanoZYRX": str(known_gross), "knownFeeNanoZYRX": str(known_fee),
+                "legacyNetNanoZYRX": str(sum(int(row["legacyNet"]) for row in rows)),
+                "legacyCount": legacy_count}
+
+    def _miner_payouts(self, address, limit, offset, snapshot, confirmations):
+        if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 1_000_000:
+            raise ValueError("Use limit 1..100 and offset 0..1000000")
+        if snapshot is None:
+            snapshot = self.db.execute("SELECT COALESCE(MAX(rowid),0) FROM payouts").fetchone()[0]
+        if type(snapshot) is not int or not 0 <= snapshot <= MAX_NANO:
+            raise ValueError("Invalid payout history snapshot")
+        join = self._miner_payout_join()
+        total = self.db.execute("SELECT COUNT(*) " + join + " WHERE p.rowid<=?", (address, snapshot)).fetchone()[0]
+        rows = self.db.execute("""SELECT p.id,p.status,p.created,n.value net,g.value gross,f.value fee """ + join +
+                               " WHERE p.rowid<=? ORDER BY p.created DESC,p.rowid DESC LIMIT ? OFFSET ?",
+                               (address, snapshot, limit, offset)).fetchall()
+        items = []
+        for row in rows:
+            known = row["gross"] is not None and row["fee"] is not None
+            items.append({"id": row["id"], "status": row["status"], "created": row["created"],
+                          "netNanoZYRX": str(row["net"]),
+                          "grossNanoZYRX": str(row["gross"]) if known else None,
+                          "feeNanoZYRX": str(row["fee"]) if known else None,
+                          "feePolicy": FEE_POLICY if known else "legacy-prepaid-unknown",
+                          "numConfirmations": None, "requiredConfirmations": confirmations,
+                          "blockId": None, "inclusionHeight": None})
+        has_more = offset + len(items) < total
+        return {"address": address, "items": items, "total": total, "limit": limit, "offset": offset,
+                "hasMore": has_more, "hasPrevious": offset > 0,
+                "nextOffset": offset + limit if has_more else None,
+                "previousOffset": max(0, offset - limit) if offset > 0 else None, "snapshot": str(snapshot)}
+
+    @read_snapshot
+    def miner_payouts(self, address, limit=20, offset=0, snapshot=None, confirmations=None):
+        """Read complete address history without exposing signed transactions or other recipients."""
+        return self._miner_payouts(address, limit, offset, snapshot, confirmations)
+
+    @read_snapshot
+    def miner_summary(self, address, connected=None, confirmations=None, now=None):
+        """Read durable accounting; connected worker counts are an event-loop snapshot."""
+        now = time.time() if now is None else now
+        connected = connected or {}
+        window_start = now - HASHRATE_WINDOW
+        credit = self.db.execute("SELECT COALESCE(exact_sum(amount),'0'),COUNT(*) FROM credits WHERE address=?",
+                                 (address,)).fetchone()
+        refund = self.db.execute("SELECT COALESCE(exact_sum(amount),'0') FROM fee_adjustments WHERE address=?",
+                                 (address,)).fetchone()[0]
+        balance = self.db.execute("SELECT amount FROM balances WHERE address=?", (address,)).fetchone()
+        payments = self.db.execute("""SELECT p.status,COUNT(*) count,COALESCE(exact_sum(n.value),'0') net,
+            COALESCE(exact_sum(CASE WHEN g.value IS NOT NULL AND f.value IS NOT NULL THEN g.value END),'0') knownGross,
+            COALESCE(exact_sum(CASE WHEN g.value IS NOT NULL AND f.value IS NOT NULL THEN f.value END),'0') knownFee,
+            SUM(CASE WHEN g.value IS NULL OR f.value IS NULL THEN 1 ELSE 0 END) legacyCount,
+            COALESCE(exact_sum(CASE WHEN g.value IS NULL OR f.value IS NULL THEN n.value END),'0') legacyNet,
+            COALESCE(exact_sum(COALESCE(g.value,n.value)),'0') debit """ + self._miner_payout_join() +
+                                   " GROUP BY p.status", (address,)).fetchall()
+        confirmed = [row for row in payments if row["status"] == "confirmed"]
+        pending = [row for row in payments if row["status"] in ("prepared", "broadcast")]
+        shares = self.db.execute("""SELECT COUNT(*) accepted,MIN(created) first,MAX(created) last,
+            SUM(CASE WHEN created>=? THEN 1 ELSE 0 END) recent,
+            SUM(CASE WHEN created>=? THEN 1 ELSE 0 END) day,
+            COALESCE(exact_sum(CASE WHEN created>=? THEN weight END),'0') hashes
+            FROM shares WHERE address=?""", (window_start, now - 86400, window_start, address)).fetchone()
+        worker_count = self.db.execute("SELECT COUNT(DISTINCT worker) FROM shares WHERE address=?", (address,)).fetchone()[0]
+        workers = {}
+        rows = self.db.execute("""SELECT worker,COUNT(*) accepted,MIN(created) first,MAX(created) last,
+            SUM(CASE WHEN created>=? THEN 1 ELSE 0 END) recent,
+            COALESCE(exact_sum(CASE WHEN created>=? THEN weight END),'0') hashes
+            FROM shares WHERE address=? GROUP BY worker ORDER BY last DESC,worker LIMIT 100""",
+                               (window_start, window_start, address)).fetchall()
+        for row in rows:
+            workers[row["worker"]] = {"name": row["worker"], "acceptedShares": row["accepted"],
+                "windowAcceptedShares": row["recent"], "firstShare": row["first"], "lastShare": row["last"],
+                "estimatedHashrate": int(row["hashes"]) / HASHRATE_WINDOW,
+                "windowExpectedHashesExact": row["hashes"], "connectedSessions": connected.get(row["worker"], 0)}
+        # An authorized worker can be connected before it submits its first share.
+        unseen_connected = []
+        for name, sessions in connected.items():
+            if name not in workers:
+                row = self.db.execute("""SELECT COUNT(*) accepted,MIN(created) first,MAX(created) last,
+                    SUM(CASE WHEN created>=? THEN 1 ELSE 0 END) recent,
+                    COALESCE(exact_sum(CASE WHEN created>=? THEN weight END),'0') hashes
+                    FROM shares WHERE address=? AND worker=?""", (window_start, window_start, address, name)).fetchone()
+                workers[name] = {"name": name, "acceptedShares": row["accepted"],
+                    "windowAcceptedShares": row["recent"] or 0, "firstShare": row["first"], "lastShare": row["last"],
+                    "estimatedHashrate": int(row["hashes"]) / HASHRATE_WINDOW,
+                    "windowExpectedHashesExact": row["hashes"], "connectedSessions": sessions}
+                if not row["accepted"]:
+                    unseen_connected.append(name)
+        for worker in workers.values():
+            worker["active"] = worker["connectedSessions"] > 0 and worker["windowAcceptedShares"] > 0
+        current = self.db.execute("""SELECT COUNT(*) accepted,
+            COALESCE(exact_sum(CASE WHEN address=? THEN weight END),'0') minerWeight,
+            COALESCE(exact_sum(weight),'0') poolWeight,
+            SUM(CASE WHEN address=? THEN 1 ELSE 0 END) minerShares FROM shares WHERE round IS NULL""",
+                                  (address, address)).fetchone()
+        miner_weight, pool_weight = int(current["minerWeight"]), int(current["poolWeight"])
+        candidates = self.db.execute("""SELECT COUNT(*) FROM blocks b WHERE status='submitted'
+            AND EXISTS(SELECT 1 FROM shares s WHERE s.address=? AND s.round IS NULL AND s.id<=b.end_share)""",
+                                    (address,)).fetchone()[0]
+        recent = self._miner_payouts(address, 5, 0, None, confirmations)
+        known = bool(shares["accepted"] or credit[1] or balance or payments or connected)
+        return {"address": address, "known": known, "generatedAt": now,
+                "account": {"creditedNanoZYRX": credit[0], "creditedBlocks": credit[1], "feeRefundNanoZYRX": refund,
+                    "lifetimeCreditNanoZYRX": str(int(credit[0]) + int(refund)),
+                    "unpaidNanoZYRX": str(balance[0] if balance else 0),
+                    "reservedBalanceDebitNanoZYRX": str(sum(int(row["debit"]) for row in pending)),
+                    "confirmedPaid": self._payment_totals(confirmed), "pendingPayout": self._payment_totals(pending),
+                    "immatureEstimatedNanoZYRX": None, "immatureEstimateAvailable": False,
+                    "immatureEstimateNote": "Submitted block rewards are not yet measured or credited and may be orphaned."},
+                "mining": {"acceptedShares": shares["accepted"], "acceptedShares24h": shares["day"] or 0,
+                    "windowAcceptedShares": shares["recent"] or 0, "firstShare": shares["first"], "lastShare": shares["last"],
+                    "estimatedHashrate": int(shares["hashes"]) / HASHRATE_WINDOW,
+                    "hashrateWindowSeconds": HASHRATE_WINDOW, "windowExpectedHashesExact": shares["hashes"],
+                    "rejectedShares": None, "pendingCandidateBlocks": candidates,
+                    "currentRound": {"acceptedShares": current["minerShares"] or 0,
+                        "minerWeightExact": str(miner_weight), "poolWeightExact": str(pool_weight),
+                        "sharePercent": miner_weight * 100 / pool_weight if pool_weight else 0}},
+                "workers": sorted(workers.values(), key=lambda worker: (-worker["connectedSessions"],
+                                -(worker["lastShare"] or 0), worker["name"])),
+                "workerCount": worker_count + len(unseen_connected),
+                "workersTruncated": worker_count > len(workers) - len(unseen_connected),
+                "connectedWorkers": sum(connected.values()), "recentPayouts": recent["items"],
+                "payoutCount": recent["total"], "payoutsLink": "/api/miner/" + address + "/payouts"}
 
     @synchronized
     def gpu_validation(self):

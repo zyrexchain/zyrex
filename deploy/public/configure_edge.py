@@ -107,12 +107,22 @@ server {{
         limit_except GET HEAD {{ deny all; }}
         try_files /index.html =404;
     }}
+    location ~ "^/miner/ZRX[1-9A-HJ-NP-Za-km-z]{{40,80}}/?$" {{
+        limit_except GET HEAD {{ deny all; }}
+        try_files /index.html =404;
+    }}
     location = /favicon.svg {{ try_files /favicon.svg =404; }}
     location ~ ^/downloads/(zyrex-cli-linux-(?:amd64|arm64)\\.tar\\.gz|SHA256SUMS)$ {{
         return 302 https://github.com/zyrexchain/zyrex/releases/download/cli-v0.1.0-testnet/$1;
     }}
     location /downloads/ {{ return 302 https://github.com/zyrexchain/zyrex/releases; }}
     location ~ ^/(api/stats|health)$ {{
+        limit_except GET HEAD {{ deny all; }}
+        proxy_pass http://127.0.0.1:28088;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 15s;
+    }}
+    location ~ ^/api/miner/ {{
         limit_except GET HEAD {{ deny all; }}
         proxy_pass http://127.0.0.1:28088;
         proxy_connect_timeout 3s;

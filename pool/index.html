@@ -1,75 +1,450 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zyrex Mining Pool</title>
 <style>
 body{margin:0;background:#101714;color:#eaf5ee;font:16px system-ui,sans-serif}
 main{max-width:1000px;margin:48px auto;padding:24px}h1{font-size:42px;margin:8px 0}
 a{color:#71f5be}.tag{color:#71f5be;letter-spacing:.15em}code{font-size:16px;word-break:break-all}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin:32px 0}
-.card{background:#1d2923;padding:20px;border-radius:12px}.value{font-size:28px;margin-top:10px}
-small{color:#a8bdb0}table{width:100%;border-collapse:collapse;margin:24px 0}
+.card{background:#1d2923;padding:20px;border-radius:12px}.value{font-size:28px;margin-top:10px;overflow-wrap:anywhere}
+small,.muted{color:#a8bdb0}table{width:100%;border-collapse:collapse;margin:24px 0}
 th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #31463a}.error{color:#ff7768}
-#payments td:first-child{max-width:230px;word-break:break-all;font:13px monospace}
-input{background:#1d2923;color:inherit;border:1px solid #31463a;padding:12px;width:90%;border-radius:8px}
+.table{overflow-x:auto}.payouts{min-width:800px}.worker-table{min-width:660px}
+.tx{max-width:230px;word-break:break-all;font:13px monospace}.nowrap{white-space:nowrap}
+input{background:#1d2923;color:inherit;border:1px solid #31463a;padding:12px;border-radius:8px;min-width:0;font:inherit}
+button{background:#71f5be;border:0;color:#101714;padding:12px 16px;border-radius:8px;cursor:pointer;font:inherit}
+button:disabled{opacity:.45;cursor:default}
+a:focus-visible,input:focus-visible,button:focus-visible{outline:2px solid #eaf5ee;outline-offset:3px}
+.address-entry{display:flex;gap:12px;margin-top:8px}.address-entry input{flex:1}
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.controls small{margin-right:auto}
+.details{display:flex;gap:16px 28px;flex-wrap:wrap}.details p{margin:4px 0}.address-display{overflow-wrap:anywhere}
+[hidden]{display:none!important}#history-status,#account-status,#form-error{min-height:1.3em}
+@media(max-width:600px){main{margin:20px auto;padding:16px}h1{font-size:34px}.address-entry{flex-direction:column}
+.value{font-size:24px}.grid{gap:12px;margin:24px 0}.card{padding:16px}}
 </style>
-<main><div class="tag" id="network">ZYREX</div><h1>Mining Pool</h1>
-<p><code id="url"></code></p><p id="status">Connecting…</p>
-<div class="grid"><div class="card"><small>Network height</small><div class="value" id="height">—</div></div>
+</head>
+<body>
+<main>
+<div class="tag" id="network">ZYREX</div>
+<h1 id="page-title">Mining Pool</h1>
+<p id="account-navigation" hidden><a href="/" id="pool-link">Mining pool overview</a> · Public address view</p>
+<p><code id="url"></code></p><p id="status" role="status">Connecting…</p>
+<section id="pool-overview" aria-label="Pool overview">
+<div class="grid">
+<div class="card"><small>Network height</small><div class="value" id="height">—</div></div>
 <div class="card"><small>Connected workers</small><div class="value" id="workers">—</div></div>
 <div class="card"><small>Accepted shares</small><div class="value" id="shares">—</div></div>
-<div class="card"><small>Estimated hashrate</small><div class="value" id="hashrate">—</div></div></div>
+<div class="card"><small>Estimated hashrate</small><div class="value" id="hashrate">—</div></div>
+</div>
+</section>
 <p>Autolykos v2 · PROP · 0% pool fee · <span id="terms"></span></p>
 <p><small>Block reward allocation: 90% miners, 10% team.
 Each payout deducts one actual network fee from its recipients, in proportion to their gross amounts.
-Test coins have no monetary value.
-<span id="gpu-status">GPU verification pending.</span></small></p>
-<h2>Connect your miner</h2><p>Username: <code>ZYREX_ADDRESS.rig_name</code> · password: <code>x</code></p>
-<input id="address" placeholder="Enter your Zyrex wallet address" autocomplete="off">
+Test coins have no monetary value. <span id="gpu-status">GPU verification pending.</span></small></p>
+<h2 id="address-heading">Connect your miner</h2>
+<p>Username: <code>ZYREX_ADDRESS.rig_name</code> · password: <code>x</code></p>
+<form id="address-form">
+<label for="address">Zyrex wallet address</label>
+<div class="address-entry">
+<input id="address" name="address" placeholder="Enter your Zyrex wallet address" autocomplete="off"
+spellcheck="false" maxlength="2048" required>
+<button type="submit">Open miner account</button>
+</div>
+<p id="form-error" class="error" role="alert"></p>
+</form>
 <p><code id="command"></code></p>
-<p id="balance"></p>
-<h2>Pool blocks</h2><table><thead><tr><th>Height</th><th>Status</th><th>Reward, ZYRX</th></tr></thead>
-<tbody id="blocks"></tbody></table>
-<h2>Recent payouts</h2><p><small id="payment-note">Enter your address to filter payments.</small></p>
-<table><thead><tr><th>Transaction</th><th>Status</th><th>Gross, ZYRX</th>
-<th>Network fee, ZYRX</th><th>Received, ZYRX</th></tr></thead><tbody id="payments"></tbody></table>
-<p id="payment-status"></p><p><small>Updates every 5 seconds. <a href="/api/stats">JSON data</a></small></p></main>
+<section id="miner-account" aria-labelledby="account-heading" hidden>
+<h2 id="account-heading">Miner account</h2>
+<p class="address-display"><code id="selected-address"></code></p>
+<p><a id="account-link" href="/">Share this account view</a> · Read-only pool records; no wallet access required.</p>
+<p id="account-status" role="status">Loading account…</p>
+<div id="account-data" hidden>
+<div class="grid">
+<div class="card"><small>Available unpaid, ZYRX</small><div class="value" id="unpaid">—</div></div>
+<div class="card"><small>Pending payouts, ZYRX</small><div class="value" id="pending">—</div></div>
+<div class="card"><small>Confirmed paid, ZYRX</small><div class="value" id="paid">—</div></div>
+<div class="card"><small>Immature estimate, ZYRX</small><div class="value" id="immature">—</div></div>
+</div>
+<p><small>Available unpaid is credited balance not yet reserved for a payout. Pending payouts are signed or broadcast,
+awaiting confirmation. Immature rewards are estimates and are not credited or available for payout.</small></p>
+<p id="immature-note" class="muted"></p>
+<div class="details">
+<p>Mature reward credits: <span id="credited">—</span> ZYRX</p>
+<p>Fee reserve refunds: <span id="refunds">—</span> ZYRX</p>
+<p>Reserved for payouts: <span id="reserved">—</span> ZYRX</p>
+</div>
+<p id="paid-details" class="muted"></p><p id="pending-details" class="muted"></p>
+<h2>Mining activity</h2>
+<div class="grid">
+<div class="card"><small>Connected workers</small><div class="value" id="miner-connected">—</div></div>
+<div class="card"><small>Accepted shares</small><div class="value" id="miner-shares">—</div></div>
+<div class="card"><small>Estimated hashrate</small><div class="value" id="miner-hashrate">—</div></div>
+<div class="card"><small>Current round share</small><div class="value" id="round-share">—</div></div>
+</div>
+<p id="mining-note" class="muted"></p><p id="round-note" class="muted"></p>
+<h3>Workers</h3>
+<p><small>Active means connected with an accepted share in the last 10 minutes.
+Hashrate is estimated from accepted work over the same window.</small></p>
+<div class="table"><table class="worker-table">
+<thead><tr><th scope="col">Worker</th><th scope="col">Status</th><th scope="col">Last accepted share (UTC)</th>
+<th scope="col">Accepted shares</th><th scope="col">Estimated hashrate</th></tr></thead>
+<tbody id="miner-workers"></tbody>
+</table></div><p id="worker-note" class="muted"></p>
+</div>
+<h2>Payout history</h2>
+<p><small>All payouts for this address, newest first. Received is the net payment; gross includes its network fee.
+Legacy prepaid fees are shown as unknown when the original amounts were not recorded.</small></p>
+<div class="controls">
+<small id="history-count">Loading payouts…</small>
+<button id="history-refresh" type="button">Refresh history</button>
+<button id="previous" type="button" disabled>Previous</button>
+<button id="next" type="button" disabled>Next</button>
+</div>
+<div class="table"><table class="payouts">
+<thead><tr><th scope="col">Time (UTC)</th><th scope="col">Status</th><th scope="col">Received, ZYRX</th>
+<th scope="col">Gross, ZYRX</th><th scope="col">Network fee, ZYRX</th><th scope="col">Transaction</th></tr></thead>
+<tbody id="miner-payments"></tbody>
+</table></div>
+<p id="history-status" role="status"></p>
+<p><small>Account data updates every 5 seconds. History keeps your selected page and snapshot;
+use Refresh history to include newly created payouts.</small></p>
+</section>
+<section id="pool-history" aria-label="Pool history">
+<h2>Pool blocks</h2>
+<div class="table"><table><thead><tr><th scope="col">Height</th><th scope="col">Status</th>
+<th scope="col">Reward, ZYRX</th></tr></thead><tbody id="blocks"></tbody></table></div>
+<h2>Recent payouts</h2><p><small>All recipients combined. Open a miner account for its complete payout history.</small></p>
+<div class="table"><table class="payouts"><thead><tr><th scope="col">Time (UTC)</th><th scope="col">Status</th>
+<th scope="col">Received, ZYRX</th><th scope="col">Gross, ZYRX</th><th scope="col">Network fee, ZYRX</th>
+<th scope="col">Transaction</th></tr></thead><tbody id="payments"></tbody></table></div>
+</section>
+<p id="payment-status"></p><p><small>Updates every 5 seconds. <a href="/api/stats">Pool JSON data</a></small></p>
+</main>
 <script>
-const $=id=>document.getElementById(id);let endpoint='',stats=null;
-function coins(value){if(value===null||value===undefined)return '—';
-let n=BigInt(value),whole=n/1000000000n,fraction=(n%1000000000n).toString().padStart(9,'0').replace(/0+$/,'');
-return whole.toString()+(fraction?'.'+fraction:'');}
-function amounts(p,key){let exact=p[key+'Exact'];return exact|| (p[key]?JSON.parse(p[key]):null);}
-function total(values,address){if(!values)return null;if(address)return values[address]??null;
-return Object.values(values).reduce((sum,value)=>sum+BigInt(value),0n);}
-function command(){let a=$('address').value.replace(/[^a-zA-Z0-9]/g,'')||'ZYREX_ADDRESS';
-$('command').textContent=endpoint?`lolMiner --algo AUTOLYKOS2 --pool ${endpoint} --user ${a}.rig1 --pass x`:'';
-payments();}
-function row(parent,values){let tr=document.createElement('tr');for(let value of values){
-let td=document.createElement('td');td.textContent=value;tr.append(td);}parent.append(tr);}
-function payments(){if(!stats)return;let address=$('address').value.trim();
-let balances=stats.balancesNanoZYRXExact||stats.balancesNanoZYRX;
-$('balance').textContent=address?'Accrued balance: '+coins(balances[address]||'0')+' ZYRX':'';
-$('payments').replaceChildren();let shown=0;
-for(let p of stats.payouts.slice().reverse()){
-let net=total(amounts(p,'amounts'),address);if(net===null)continue;
-row($('payments'),[p.id,p.status,coins(total(amounts(p,'gross'),address)),
-p.fees?coins(total(amounts(p,'fees'),address)):'Prepaid',coins(net)]);if(++shown===15)break;}
-$('payment-note').textContent=address?'Payments to the entered address.':'All recipients combined. Enter your address to filter.';
-$('payment-note').textContent+=' Historical payments show prepaid fees; unused reserves have been refunded.';}
-async function refresh(){try{let r=await fetch('/api/stats');if(!r.ok)throw Error(r.status);
-let s=await r.json();stats=s;endpoint=s.stratumUrl;$('url').textContent=endpoint;
-$('network').textContent='ZYREX / '+s.network.toUpperCase();
-$('terms').textContent=`Payouts from ${coins(s.minimumPayoutNano)} ZYRX after ${s.confirmations} confirmations`;
-$('status').textContent=s.halted||(s.ready?'Pool ready for mining':'Waiting for node');
-$('status').className=s.ready&&!s.halted?'':'error';
-$('gpu-status').textContent=s.gpuVerified?
-'GPU verified: '+s.gpuValidation.device+' · '+s.gpuValidation.miner:'GPU verification pending for this network.';
-$('height').textContent=s.nodeHeight;$('workers').textContent=s.connectedWorkers;$('shares').textContent=s.acceptedShares;
-$('hashrate').textContent=(s.estimatedHashrate/1e6).toFixed(2)+' MH/s';
-$('blocks').replaceChildren();
-for(let b of s.blocks.slice(-15).reverse())row($('blocks'),[b.height,b.status,(b.reward/1e9).toFixed(3)]);
-command();
-$('payment-status').textContent=s.payoutError?'Payout processing delayed. Your accrued balance is retained.':'';
-}catch(e){$('status').textContent='Pool unavailable';$('status').className='error';}}
-$('address').addEventListener('input',command);refresh();setInterval(refresh,5000);
-</script></html>
+'use strict';
+const $ = id => document.getElementById(id);
+const explorer = 'https://explorer.zyrexchain.com/';
+const pageSize = 20;
+let endpoint = '', selected = '', accountGeneration = 0, historyGeneration = 0;
+let accountController = null, historyController = null, accountBusy = false, historyBusy = false;
+let historyOffset = 0, historySnapshot = null, historyPage = null, statsBusy = false;
+
+function integer(value) {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value);
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  throw new Error('Invalid integer amount');
+}
+function coins(value) {
+  if (value === null || value === undefined) return '—';
+  const n = integer(value), fraction = (n % 1000000000n).toString().padStart(9, '0').replace(/0+$/, '');
+  return (n / 1000000000n).toString() + (fraction ? '.' + fraction : '');
+}
+function exactCoins(value) {
+  if (value !== null && typeof value !== 'string') throw new Error('Invalid exact amount');
+  return coins(value);
+}
+function hashrate(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
+  if (value >= 1e9) return (value / 1e9).toFixed(2) + ' GH/s';
+  if (value >= 1e6) return (value / 1e6).toFixed(2) + ' MH/s';
+  if (value >= 1e3) return (value / 1e3).toFixed(2) + ' kH/s';
+  return value.toFixed(2) + ' H/s';
+}
+function time(value) {
+  if (value === null || value === undefined) return '—';
+  const date = new Date(Number(value) * 1000);
+  if (!Number.isFinite(date.getTime())) throw new Error('Invalid timestamp');
+  return date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+}
+function text(value) { return value === null || value === undefined ? '—' : String(value); }
+function row(parent, values) {
+  const tr = document.createElement('tr');
+  for (const value of values) {
+    const td = document.createElement('td');
+    if (value instanceof Node) td.append(value); else td.textContent = text(value);
+    tr.append(td);
+  }
+  parent.append(tr);
+  return tr;
+}
+function transaction(id) {
+  const item = document.createElement(/^[a-fA-F0-9]{64}$/.test(id) ? 'a' : 'span');
+  item.textContent = text(id);
+  if (item.tagName === 'A') item.href = explorer + '#' + encodeURIComponent(id);
+  item.className = 'tx';
+  return item;
+}
+function emptyRow(parent, message, columns) {
+  const tr = row(parent, [message]);
+  tr.firstChild.colSpan = columns;
+}
+async function api(path, signal) {
+  const response = await fetch(path, {signal, cache: 'no-store'});
+  const result = await response.json();
+  if (!response.ok) {
+    const message = response.status === 400 ? 'Invalid address or request. Use a wallet address for this network.' :
+      response.status === 404 ? 'This account is unavailable.' : 'Pool account data is unavailable. Please try again.';
+    throw new Error(message);
+  }
+  if (!result || typeof result !== 'object') throw new Error('Invalid response from the pool.');
+  return result;
+}
+function updateCommand() {
+  const address = $('address').value.trim();
+  const username = /^[1-9A-HJ-NP-Za-km-z]{10,2048}$/.test(address) ? address : 'ZYREX_ADDRESS';
+  $('command').textContent = endpoint ? `lolMiner --algo AUTOLYKOS2 --pool ${endpoint} --user ${username}.rig1 --pass x` : '';
+}
+function payoutTotals(value, label) {
+  if (!value || typeof value.count !== 'number') throw new Error('Invalid payout summary');
+  const gross = exactCoins(value.grossNanoZYRX), fee = exactCoins(value.feeNanoZYRX);
+  let message = `${label}: ${value.count} transaction${value.count === 1 ? '' : 's'} · gross ${gross} ZYRX · network fees ${fee} ZYRX.`;
+  if (value.legacyCount) message += ` ${value.legacyCount} legacy payout${value.legacyCount === 1 ? '' : 's'} with unrecorded gross/fees.`;
+  return message;
+}
+function renderAccount(data) {
+  if (data.address !== selected || !data.account || !data.mining || !Array.isArray(data.workers)) {
+    throw new Error('Invalid account response');
+  }
+  const account = data.account, mining = data.mining, round = mining.currentRound;
+  const formatted = {
+    unpaid: exactCoins(account.unpaidNanoZYRX), pending: exactCoins(account.pendingPayout.netNanoZYRX),
+    paid: exactCoins(account.confirmedPaid.netNanoZYRX), immature: exactCoins(account.immatureEstimatedNanoZYRX),
+    credited: exactCoins(account.creditedNanoZYRX), refunds: exactCoins(account.feeRefundNanoZYRX),
+    reserved: exactCoins(account.reservedBalanceDebitNanoZYRX)
+  };
+  const paidDetails = payoutTotals(account.confirmedPaid, 'Confirmed payouts');
+  const pendingDetails = payoutTotals(account.pendingPayout, 'Pending payouts');
+  const workerRows = document.createDocumentFragment();
+  for (const worker of data.workers) {
+    const status = worker.active ? 'Active' : worker.connectedSessions > 0 ? 'Connected · no recent shares' : 'Offline';
+    row(workerRows, [worker.name || '(unnamed)', status, time(worker.lastShare), worker.acceptedShares,
+      hashrate(worker.estimatedHashrate)]);
+  }
+  if (!data.workers.length) emptyRow(workerRows, 'No workers recorded for this address.', 5);
+  let roundShare = '—';
+  if (round && round.minerWeightExact !== undefined && round.poolWeightExact !== undefined) {
+    const minerWeight = integer(round.minerWeightExact), poolWeight = integer(round.poolWeightExact);
+    if (poolWeight > 0n) {
+      const percent = minerWeight * 10000n / poolWeight;
+      roundShare = (percent / 100n).toString() + '.' + (percent % 100n).toString().padStart(2, '0') + '%';
+    }
+  }
+  for (const [id, value] of Object.entries(formatted)) $(id).textContent = value;
+  $('paid-details').textContent = paidDetails;
+  $('pending-details').textContent = pendingDetails;
+  $('immature-note').textContent = account.immatureEstimatedNanoZYRX === null || account.immatureEstimatedNanoZYRX === undefined ?
+    `Immature reward estimates are currently unavailable; ${text(mining.pendingCandidateBlocks)} submitted candidate blocks. ` +
+    'Only mature, credited rewards appear in available unpaid.' :
+    'Estimated from currently recorded immature rounds; estimates can change if a block is orphaned.';
+  $('miner-connected').textContent = data.workers.filter(worker => worker.connectedSessions > 0).length;
+  $('miner-shares').textContent = text(mining.acceptedShares);
+  $('miner-hashrate').textContent = hashrate(mining.estimatedHashrate);
+  $('round-share').textContent = roundShare;
+  $('round-note').textContent = `Current unsettled round: ${text(round?.acceptedShares)} accepted shares from this address. ` +
+    'Contribution is weighted work, not a guaranteed reward.';
+  $('mining-note').textContent = `Last accepted share: ${time(mining.lastShare)} UTC. ` +
+    `${text(mining.windowAcceptedShares)} shares accepted in the last 10 minutes; ${text(mining.acceptedShares24h)} in the last 24 hours.`;
+  $('miner-workers').replaceChildren(workerRows);
+  $('worker-note').textContent = data.workersTruncated ? `Showing ${data.workers.length} of ${data.workerCount} recorded workers.` : '';
+  $('account-status').textContent = data.known ? `Updated ${time(data.generatedAt)} UTC.` :
+    'No pool activity has been recorded for this address.';
+  $('account-status').className = '';
+  $('account-data').hidden = false;
+}
+async function refreshAccount() {
+  if (!selected || accountBusy) return;
+  const generation = accountGeneration, address = selected;
+  accountBusy = true;
+  const controller = new AbortController();
+  accountController = controller;
+  try {
+    const data = await api('/api/miner/' + encodeURIComponent(address), controller.signal);
+    if (generation !== accountGeneration) return;
+    renderAccount(data);
+  } catch (error) {
+    if (generation !== accountGeneration || error.name === 'AbortError') return;
+    $('account-data').hidden = true;
+    $('account-status').className = 'error';
+    $('account-status').textContent = 'Account unavailable. ' + error.message;
+  } finally {
+    if (generation === accountGeneration) accountBusy = false;
+  }
+}
+function renderPayouts(data) {
+  if (data.address !== selected || !Array.isArray(data.items) || !Number.isSafeInteger(data.total) || data.total < 0 ||
+      data.offset !== historyOffset || data.limit !== pageSize || !/^\d+$/.test(data.snapshot)) {
+    throw new Error('Invalid payout response');
+  }
+  const rows = document.createDocumentFragment();
+  for (const payout of data.items) {
+    const tr = row(rows, [time(payout.created), payout.status, exactCoins(payout.netNanoZYRX),
+      exactCoins(payout.grossNanoZYRX), exactCoins(payout.feeNanoZYRX), transaction(payout.id)]);
+    tr.lastChild.className = 'tx';
+    tr.firstChild.className = 'nowrap';
+    if (payout.feePolicy === 'legacy-prepaid-unknown') tr.children[4].title = 'Original prepaid network fee was not recorded.';
+  }
+  if (!data.items.length) emptyRow(rows, 'No payouts recorded for this address.', 6);
+  historyPage = data;
+  historySnapshot = data.snapshot;
+  $('miner-payments').replaceChildren(rows);
+  $('history-count').textContent = data.total ?
+    `${data.offset + 1}–${data.offset + data.items.length} of ${data.total} payouts · Page ${Math.floor(data.offset / pageSize) + 1}` :
+    '0 payouts';
+  $('previous').disabled = !data.hasPrevious;
+  $('next').disabled = !data.hasMore;
+  $('history-status').className = '';
+  $('history-status').textContent = '';
+}
+async function refreshHistory(replace = false) {
+  if (!selected || (historyBusy && !replace)) return;
+  if (replace) {
+    historyController?.abort();
+    historyGeneration++;
+  }
+  const generation = historyGeneration, address = selected;
+  historyBusy = true;
+  const controller = new AbortController();
+  historyController = controller;
+  $('previous').disabled = true;
+  $('next').disabled = true;
+  try {
+    const query = new URLSearchParams({limit: String(pageSize), offset: String(historyOffset)});
+    if (historySnapshot !== null) query.set('snapshot', historySnapshot);
+    const data = await api('/api/miner/' + encodeURIComponent(address) + '/payouts?' + query, controller.signal);
+    if (generation !== historyGeneration || address !== selected) return;
+    renderPayouts(data);
+  } catch (error) {
+    if (generation !== historyGeneration || error.name === 'AbortError') return;
+    $('miner-payments').replaceChildren();
+    historyPage = null;
+    $('history-count').textContent = 'History unavailable';
+    $('history-status').className = 'error';
+    $('history-status').textContent = 'Payout history unavailable. ' + error.message;
+  } finally {
+    if (generation === historyGeneration) historyBusy = false;
+  }
+}
+function routeAddress() {
+  const route = location.pathname.match(/^\/miner\/([^/]+)\/?$/);
+  try { return route ? decodeURIComponent(route[1]) : new URLSearchParams(location.search).get('address') || ''; }
+  catch (error) { return '!invalid-address'; }
+}
+function openAccount(address, push = false) {
+  address = address.trim();
+  if (push) history.pushState(null, '', address ? '/miner/' + encodeURIComponent(address) : '/');
+  accountController?.abort();
+  historyController?.abort();
+  accountGeneration++;
+  historyGeneration++;
+  selected = address;
+  accountBusy = false;
+  historyBusy = false;
+  historyOffset = 0;
+  historySnapshot = null;
+  historyPage = null;
+  $('address').value = address;
+  $('form-error').textContent = '';
+  $('page-title').textContent = address ? 'Miner Account' : 'Mining Pool';
+  document.title = address ? 'Miner Account · Zyrex Mining Pool' : 'Zyrex Mining Pool';
+  $('pool-overview').hidden = !!address;
+  $('pool-history').hidden = !!address;
+  $('account-navigation').hidden = !address;
+  $('miner-account').hidden = !address;
+  $('account-data').hidden = true;
+  $('address-heading').textContent = address ? 'View a miner account' : 'Connect your miner';
+  $('selected-address').textContent = address;
+  $('account-link').href = '/miner/' + encodeURIComponent(address);
+  $('account-status').className = '';
+  $('account-status').textContent = 'Loading account…';
+  $('miner-payments').replaceChildren();
+  $('history-count').textContent = 'Loading payouts…';
+  $('history-status').textContent = '';
+  $('previous').disabled = true;
+  $('next').disabled = true;
+  updateCommand();
+  if (address) { refreshAccount(); refreshHistory(); }
+}
+function sumExact(payout, key) {
+  const values = payout[key + 'Exact'];
+  if (values === null || values === undefined) return null;
+  return Object.values(values).reduce((sum, amount) => sum + integer(amount), 0n);
+}
+async function refreshStats() {
+  if (statsBusy) return;
+  statsBusy = true;
+  try {
+    const data = await api('/api/stats');
+    endpoint = data.stratumUrl;
+    $('url').textContent = endpoint;
+    $('network').textContent = 'ZYREX / ' + data.network.toUpperCase();
+    $('terms').textContent = `Payouts from ${coins(data.minimumPayoutNano)} ZYRX after ${data.confirmations} confirmations`;
+    $('status').textContent = data.halted || (data.ready ? 'Pool ready for mining' : 'Waiting for node');
+    $('status').className = data.ready && !data.halted ? '' : 'error';
+    $('gpu-status').textContent = data.gpuVerified ?
+      'GPU verified: ' + data.gpuValidation.device + ' · ' + data.gpuValidation.miner : 'GPU verification pending for this network.';
+    $('height').textContent = text(data.nodeHeight);
+    $('workers').textContent = text(data.connectedWorkers);
+    $('shares').textContent = text(data.acceptedShares);
+    $('hashrate').textContent = hashrate(data.estimatedHashrate);
+    const blocks = document.createDocumentFragment(), payments = document.createDocumentFragment();
+    for (const block of data.blocks.slice(-15).reverse()) {
+      row(blocks, [block.height, block.status, coins(block.rewardExact ?? block.reward)]);
+    }
+    if (!data.blocks.length) emptyRow(blocks, 'No pool blocks yet.', 3);
+    for (const payout of data.payouts.slice(-15).reverse()) {
+      const tr = row(payments, [time(payout.created), payout.status, coins(sumExact(payout, 'amounts')),
+        coins(sumExact(payout, 'gross')), coins(sumExact(payout, 'fees')), transaction(payout.id)]);
+      tr.lastChild.className = 'tx';
+      tr.firstChild.className = 'nowrap';
+    }
+    if (!data.payouts.length) emptyRow(payments, 'No payouts yet.', 6);
+    $('blocks').replaceChildren(blocks);
+    $('payments').replaceChildren(payments);
+    updateCommand();
+    $('payment-status').textContent = data.payoutError ? 'Payout processing delayed. Your accrued balance is retained.' : '';
+  } catch (error) {
+    $('status').textContent = 'Pool unavailable';
+    $('status').className = 'error';
+  } finally { statsBusy = false; }
+}
+$('address-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const address = $('address').value.trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{10,2048}$/.test(address)) {
+    $('form-error').textContent = 'Enter a valid Zyrex wallet address.';
+    $('address').focus();
+    return;
+  }
+  openAccount(address, true);
+});
+$('address').addEventListener('input', () => { $('form-error').textContent = ''; updateCommand(); });
+$('pool-link').addEventListener('click', event => { event.preventDefault(); openAccount('', true); });
+$('previous').addEventListener('click', () => {
+  if (!historyPage?.hasPrevious) return;
+  historyOffset = historyPage.previousOffset;
+  $('miner-payments').replaceChildren();
+  $('history-count').textContent = 'Loading payouts…';
+  refreshHistory(true);
+});
+$('next').addEventListener('click', () => {
+  if (!historyPage?.hasMore) return;
+  historyOffset = historyPage.nextOffset;
+  $('miner-payments').replaceChildren();
+  $('history-count').textContent = 'Loading payouts…';
+  refreshHistory(true);
+});
+$('history-refresh').addEventListener('click', () => {
+  historySnapshot = null;
+  refreshHistory(true);
+});
+window.addEventListener('popstate', () => openAccount(routeAddress()));
+openAccount(routeAddress());
+refreshStats();
+setInterval(() => { refreshStats(); refreshAccount(); refreshHistory(); }, 5000);
+</script>
+</body>
+</html>

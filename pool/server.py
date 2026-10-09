@@ -13,6 +13,7 @@ import time
 from collections import OrderedDict
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 
 from ledger import Ledger
 from node import Node
@@ -299,16 +300,72 @@ class Pool:
             self.payout_error = type(error).__name__ + ": " + str(error)
             LOG.warning("Payout maintenance retry: %s", type(error).__name__)
 
+    async def miner_api(self, target):
+        """Address-only, read-only accounting. No node or wallet RPC is performed here."""
+        if len(target) > 512 or "%" in target or "#" in target:
+            raise ValueError("Invalid miner API request")
+        route = urlsplit(target)
+        match = re.fullmatch(r"/api/miner/([^/]{1,100})(/payouts)?", route.path)
+        if not match:
+            raise ValueError("Use /api/miner/ADDRESS or /api/miner/ADDRESS/payouts")
+        address = validate_miner_address(match[1], self.config["addressPrefix"])
+        pairs = parse_qsl(route.query, keep_blank_values=True, strict_parsing=True, max_num_fields=3)
+        query = dict(pairs)
+        if len(query) != len(pairs):
+            raise ValueError("Duplicate pagination parameters")
+        confirmations = self.config["confirmations"]
+        if match[2]:
+            if set(query) - {"limit", "offset", "snapshot"}:
+                raise ValueError("Unknown pagination parameter")
+            values = {}
+            for name, value in query.items():
+                if not re.fullmatch(r"0|[1-9][0-9]{0,18}", value):
+                    raise ValueError("Pagination parameters must be bounded nonnegative integers")
+                values[name] = int(value)
+            return await asyncio.to_thread(self.ledger.miner_payouts, address,
+                                           values.get("limit", 20), values.get("offset", 0),
+                                           values.get("snapshot"), confirmations)
+        if query:
+            raise ValueError("The miner summary does not accept query parameters")
+        connected = {}
+        for client in tuple(self.clients):
+            if client.username and client.address == address:
+                connected[client.worker] = connected.get(client.worker, 0) + 1
+        result = await asyncio.to_thread(self.ledger.miner_summary, address, connected, confirmations)
+        result.update({"coin": "ZYRX", "network": self.config.get("network", "devnet"), "ready": self.ready(),
+                       "nodeHeight": self.info["fullHeight"] if self.info else None,
+                       "confirmations": confirmations, "payoutScheme": "PROP", "poolFeePercent": 0,
+                       "minimumPayoutNanoZYRX": str(self.config["minimumPayoutNano"]),
+                       "payoutFeeNanoZYRX": str(self.config["payoutFeeNano"]),
+                       "feePaidBy": "miners", "payoutFeePolicy": "actual-transaction-v1"})
+        return result
+
     async def http(self, reader, writer):
         try:
             if not self.permitted(writer):
                 return
             header = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
             first = header.decode("ascii").split("\r\n")[0].split(" ")
-            path = first[1] if len(first) == 3 and first[0] in ("GET", "HEAD") else ""
+            valid_request = len(first) == 3 and first[2] in ("HTTP/1.0", "HTTP/1.1")
+            method = first[0] if valid_request else ""
+            path = first[1] if valid_request else ""
             status, content_type = "200 OK", "application/json"
-            if path in ("/api/stats", "/health"):
-                result = self.ledger.stats()
+            if not valid_request or not path.startswith("/") or path.startswith("//"):
+                status, body = "400 Bad Request", b'{"error":"Invalid HTTP request"}'
+            elif method not in ("GET", "HEAD"):
+                status, body = "405 Method Not Allowed", b'{"error":"Use GET or HEAD"}'
+            elif path.startswith("/api/miner/"):
+                try:
+                    result = await self.miner_api(path)
+                    body = json.dumps(result, separators=(",", ":")).encode()
+                    if len(body) > 262144:
+                        status, body = "503 Service Unavailable", b'{"error":"Miner response exceeds its size limit"}'
+                except ValueError as error:
+                    status, body = "400 Bad Request", json.dumps({"error": str(error)}).encode()
+                except sqlite3.Error:
+                    status, body = "503 Service Unavailable", b'{"error":"Accounting is temporarily unavailable"}'
+            elif path in ("/api/stats", "/health"):
+                result = await asyncio.to_thread(self.ledger.stats)
                 result.update({"coin": "ZYRX", "network": self.config.get("network", "devnet"), "ready": self.ready(),
                     "nodeHeight": self.info["fullHeight"] if self.info else None,
                     "candidateHeight": self.work["h"] if self.work else None,
@@ -329,10 +386,10 @@ class Pool:
             else:
                 status, body = "404 Not Found", b'{}'
             writer.write((f"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\n"
-                          "Cache-Control: no-store\r\nConnection: close\r\n\r\n").encode() +
-                         (body if first[0] != "HEAD" else b""))
+                          "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nAllow: GET, HEAD\r\n"
+                          "Connection: close\r\n\r\n").encode() + (body if method != "HEAD" else b""))
             await asyncio.wait_for(writer.drain(), 5)
-        except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+        except (OSError, ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
             pass
         finally:
             writer.close()

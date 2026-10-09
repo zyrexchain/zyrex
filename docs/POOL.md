@@ -13,6 +13,16 @@ The miner username is `ZYREX_ADDRESS.worker_name`; password `x` enables automati
 share difficulty. A password such as `d=0.1` selects a fixed Miningcore-compatible
 difficulty. TLS requires support from the chosen miner.
 
+## Miner accounts
+
+Open a payout address on the pool website to view its read-only miner account.
+The shareable page is `/miner/ADDRESS`. It shows mature unpaid credits, pending
+payouts, lifetime confirmed payments, workers and weighted round contribution.
+Payout history is paginated across all recorded payments for that address;
+amounts and network fees are displayed in exact integer units. Legacy payments
+retain their recorded net amounts without inventing missing gross or fee data.
+The account never requests a password, recovery phrase or wallet private key.
+
 ## Accounting
 
 The payout scheme is PROP with a 0% pool fee. SQLite persists accepted shares,
