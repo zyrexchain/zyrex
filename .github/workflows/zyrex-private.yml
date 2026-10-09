@@ -22,8 +22,8 @@ jobs:
         run: PYTHONPATH=pool python3 -m unittest discover -s explorer -p 'test_*.py' -v
       - name: Consensus, address, network and upstream PoW/DAA tests
         run: >-
-          scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *MessageSerializerSpecification *NetworkControllerSpec'
-          'ergoCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec' assembly
+          scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification *MessageSerializerSpecification *NetworkControllerSpec'
+          'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec' assembly
       - name: Launch three private nodes
         run: scripts/devnet-up
       - name: Test payments, payouts and restart recovery

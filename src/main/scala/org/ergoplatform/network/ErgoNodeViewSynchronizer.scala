@@ -164,7 +164,7 @@ class ErgoNodeViewSynchronizer(networkControllerRef: ActorRef,
   /**
     * UTXO set snapshot manifests found in the p2p are stored in this table. The table is cleared when a manifest
     * is found which available for downloading from at least min number of peers required (the min is provided in
-    * ergo.node.utxo.p2pUtxoSnapshots setting)
+    * zyrex.node.utxo.p2pUtxoSnapshots setting)
     */
   private val availableManifests = mutable.Map[ModifierId, (Height, Seq[ConnectedPeer])]()
 

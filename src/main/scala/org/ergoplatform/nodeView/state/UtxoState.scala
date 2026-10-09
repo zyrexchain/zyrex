@@ -165,8 +165,6 @@ class UtxoState(override val persistentProver: PersistentBatchAVLProver[Digest32
                * In most cases, announced proof is okay, and as proof is already checked, problem in some
                * extra bytes added to the proof.
                *
-               * Could be related to https://github.com/ergoplatform/ergo/issues/1614
-               *
                * So the problem could appear on mining nodes only, and caused by
                * proofsForTransactions() wasting the tree unexpectedly.
                *

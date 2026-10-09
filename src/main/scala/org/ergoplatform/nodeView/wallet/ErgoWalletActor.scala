@@ -126,7 +126,7 @@ class ErgoWalletActor(settings: ErgoSettings,
         state.offChainRegistry.digest
       }
       val res = if (settings.walletSettings.checkEIP27) {
-        // If re-emission token in the wallet, subtract it from ERG balance
+        // If re-emission token in the wallet, subtract it from the native coin balance
         val reemissionAmt = walletDigest.walletAssetBalances
           .find(_._1 == settings.chainSettings.reemission.reemissionTokenId)
           .map(_._2)
@@ -295,7 +295,7 @@ class ErgoWalletActor(settings: ErgoSettings,
             context.become(loadedWallet(state.copy(error = Some(errorMsg))))
           case _: Success[Unit] =>
             // Reset outputs Bloom filter to have it initialized again on next block scanned
-            // todo: for offchain registry, refresh is also needed, https://github.com/ergoplatform/ergo/issues/1180
+            // todo: the offchain registry also needs refreshing
             context.become(loadedWallet(state.copy(outputsFilter = None)))
         }
       } else {
@@ -499,7 +499,7 @@ class ErgoWalletActor(settings: ErgoSettings,
     if (e.getMessage.startsWith("Illegal key size")) {
       val dkLen = settings.walletSettings.secretStorage.encryption.dkLen
       Failure[T](new Exception(s"Key of length $dkLen is not allowed on your JVM version." +
-        s"Set `ergo.wallet.secretStorage.encryption.dkLen = 128` or update JVM"))
+        s"Set `zyrex.wallet.secretStorage.encryption.dkLen = 128` or update JVM"))
     } else {
       Failure[T](e)
     }

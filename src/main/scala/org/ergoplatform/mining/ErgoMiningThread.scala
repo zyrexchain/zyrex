@@ -93,6 +93,6 @@ object ErgoMiningThread {
   def apply(ergoSettings: ErgoSettings, minerRef: ActorRef, sk: BigInt)(
     implicit context: ActorRefFactory
   ): ActorRef =
-    context.actorOf(props(ergoSettings, minerRef, sk), s"ErgoMiningThread-${Random.alphanumeric.take(5).mkString}")
+    context.actorOf(props(ergoSettings, minerRef, sk), s"ZyrexMiningThread-${Random.alphanumeric.take(5).mkString}")
 
 }

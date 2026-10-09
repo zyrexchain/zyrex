@@ -71,7 +71,7 @@ trait UtxoStateReader extends ErgoStateReader with UtxoSetSnapshotPersistence {
 
   /**
     *
-    * @param fb - ergo full block
+    * @param fb - full block
     * @return emission box from this block transactions
     */
   protected[state] def extractEmissionBox(fb: ErgoFullBlock): Option[ErgoBox] = {

@@ -1,15 +1,15 @@
 # Private-testnet validation
 
-Date: 2026-10-08. Base: Ergo commit `3a6b00d37e3bda2b36447a922606b4ca5a09568f`.
+Date: 2026-10-08. Base commit: `3a6b00d37e3bda2b36447a922606b4ca5a09568f`.
 
 - Compile and assembly succeeded with JDK 11 and sbt 1.11.1.
 - ZyrexConsensusSpec + MessageSerializerSpecification: 14 tests passed.
 - Upstream AutolykosPowSchemeSpec + DifficultyAdjustmentSpecification: 18 tests passed.
 - All 37 nonzero subsidy periods were checked at both boundaries by native
-  transaction validation and direct ErgoScript evaluation, including the final nano unit.
+  transaction validation and direct guarding-script evaluation, including the final nano unit.
 - Tampered or omitted founder outputs, wrong reward amounts and foreign address
   prefixes are rejected. P2PK, P2SH and P2S round trips and damaged checksums are tested.
-- Network parser rejects Ergo magic and other Zyrex network magic.
+- Network parser rejects foreign network magic, including other Zyrex networks.
 - Two distinct founder keys are required; infinity and duplicate encodings are rejected.
 - UTXO rollback removes orphan rewards and applies an alternate chain. Two
   independent state databases agree through height 129, including the first voting epoch.

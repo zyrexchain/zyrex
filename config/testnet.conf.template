@@ -2,6 +2,6 @@
 zyrex.node.mining = false
 scorex.network.nodeName = "zyrex-testnet-node"
 scorex.network.bindAddress = "0.0.0.0:19531"
-scorex.network.knownPeers = ["stratum.zyrexchain.com:19531", "stratum.zyrexchain.com:19533"]
+scorex.network.knownPeers = ["zyrexchain.com:19531", "zyrexchain.com:19533"]
 scorex.restApi.bindAddress = "127.0.0.1:19554"
 # Set a strong private API key hash before using wallet operations.

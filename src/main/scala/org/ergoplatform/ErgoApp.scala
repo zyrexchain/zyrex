@@ -28,7 +28,7 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.io.{Codec, Source}
 
 /**
-  * Ergo reference protocol client application runnable from command line
+  * Zyrex protocol client application runnable from command line
   * @param args parsed command line arguments
   */
 class ErgoApp(args: Args) extends ScorexLogging {
@@ -36,7 +36,7 @@ class ErgoApp(args: Args) extends ScorexLogging {
   log.info(s"Running with args: $args")
 
   private val ergoSettings: ErgoSettings = ErgoSettingsReader.read(args)
-  require(ergoSettings.chainSettings.zyrex.nonEmpty, "Zyrex requires its own chain configuration; Ergo networks are disabled")
+  require(ergoSettings.chainSettings.zyrex.nonEmpty, "Zyrex requires its own chain configuration")
   require(ergoSettings.chainSettings.protocolVersion == 4, "Zyrex starts with protocol version 4 / Autolykos v2")
   require(ergoSettings.chainSettings.blockInterval.toMillis == 60000, "Zyrex block interval must be 60 seconds")
   require(ergoSettings.chainSettings.powScheme.getClass == classOf[org.ergoplatform.mining.AutolykosPowScheme] &&
@@ -44,7 +44,7 @@ class ErgoApp(args: Args) extends ScorexLogging {
     "Zyrex requires genuine Autolykos v2 with k=32, n=26")
   require(java.util.Arrays.equals(org.ergoplatform.nodeView.state.ErgoState.genesisDigest(ergoSettings.chainSettings),
     ergoSettings.chainSettings.genesisStateDigest), "Genesis state digest does not match the founder keys and chain rules")
-  require(!ergoSettings.chainSettings.reemission.checkReemissionRules, "Ergo re-emission is disabled in Zyrex")
+  require(!ergoSettings.chainSettings.reemission.checkReemissionRules, "Legacy re-emission is disabled in Zyrex")
   require(ergoSettings.chainSettings.addressPrefix == ergoSettings.networkType.addressPrefix,
     "Incorrect Zyrex address prefix")
   private val expectedMagic = Map[NetworkType, Seq[Byte]](
@@ -55,7 +55,7 @@ class ErgoApp(args: Args) extends ScorexLogging {
     _.toArray.sameElements(ergoSettings.scorexSettings.network.magicBytes)), "Incorrect Zyrex network magic")
   require(ergoSettings.chainSettings.genesisId.nonEmpty, "Zyrex requires a pinned genesis ID")
 
-  // Bundle the mined private-testnet genesis so a fresh local network is reproducible.
+  // Bundle the selected network genesis so a fresh node is reproducible.
   private val genesisResource = s"genesis/${ergoSettings.networkType.verboseName}.json"
   private val genesisSource = Source.fromResource(genesisResource)(Codec.UTF8)
   private val launchGenesis = try {
@@ -131,7 +131,7 @@ class ErgoApp(args: Args) extends ScorexLogging {
 
   private val readersHolderRef: ActorRef = ErgoReadersHolderRef(nodeViewHolderRef)
 
-  // Create an instance of ErgoMiner actor if "mining = true" in config
+  // Create a miner actor if "mining = true" in config
   private val minerRefOpt: Option[ActorRef] =
     if (ergoSettings.nodeSettings.mining) {
       Some(ErgoMiner(ergoSettings, nodeViewHolderRef, readersHolderRef))

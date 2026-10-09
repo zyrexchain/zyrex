@@ -20,7 +20,7 @@ import sigma.interpreter.{ContextExtension, ProverResult}
 /**
   * Pins the invariants of the mempool policy filter rejecting storage rent collection
   * transactions (`ErgoMemPool.containsStorageRentClaim`, gated on the
-  * `ergo.node.rejectStorageRentTxs` setting).
+  * `zyrex.node.rejectStorageRentTxs` setting).
   *
   * A storage rent claim spends a box via an empty spending proof and the storage-rent-specific
   * context extension variable #127 (index of the recreated output). Storage rent is to be

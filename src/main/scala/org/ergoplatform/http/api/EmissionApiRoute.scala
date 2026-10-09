@@ -70,7 +70,7 @@ object EmissionApiRoute {
     *
     * @param height - height emission info is given for
     * @param minerReward - miner reward for given height
-    * @param totalCoinsIssued - total amount of ERG emitted
+    * @param totalCoinsIssued - total amount of ZYRX emitted
     * @param totalRemainCoins - total amount of ERGs left in the emission contract box
     * @param reemissionAmt - re-emission tokens issuance for given height (if EIP-27 is activated)
     */

@@ -8,7 +8,7 @@ info:
     name: Zyrex
   license:
     name: CC0 1.0 Universal
-    url: https://raw.githubusercontent.com/ergoplatform/ergo/master/LICENSE
+    url: https://raw.githubusercontent.com/zyrexchain/zyrex/main/LICENSE
 
 servers:
   - url: /
@@ -23,7 +23,7 @@ components:
 
   schemas:
     # Objects
-    ErgoTransactionInput:
+    ZyrexTransactionInput:
       type: object
       required:
         - boxId
@@ -34,7 +34,7 @@ components:
         spendingProof:
           $ref: '#/components/schemas/SpendingProof'
 
-    ErgoTransactionDataInput:
+    ZyrexTransactionDataInput:
       type: object
       required:
         - boxId
@@ -42,7 +42,7 @@ components:
         boxId:
           $ref: '#/components/schemas/TransactionBoxId'
 
-    ErgoTransactionUnsignedInput:
+    ZyrexTransactionUnsignedInput:
       type: object
       required:
         - boxId
@@ -103,7 +103,7 @@ components:
           items:
             type: object
 
-    ErgoTransactionOutput:
+    ZyrexTransactionOutput:
       type: object
       required:
         - value
@@ -120,7 +120,7 @@ components:
           minimum: 0
           example: 147
         ergoTree:
-          $ref: '#/components/schemas/ErgoTree'
+          $ref: '#/components/schemas/ZyrexTree'
         creationHeight:
           description: Height the output was created at
           type: integer
@@ -156,7 +156,7 @@ components:
         - scans
       properties:
         box:
-          $ref: '#/components/schemas/ErgoTransactionOutput'
+          $ref: '#/components/schemas/ZyrexTransactionOutput'
         confirmationsNum:
           description: Number of confirmations, if the box is included into the blockchain
           type: integer
@@ -165,7 +165,7 @@ components:
           example: 147
           nullable: true
         address:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
         creationTransaction:
           description: Transaction which created the box
           $ref: '#/components/schemas/ModifierId'
@@ -238,9 +238,9 @@ components:
                 type: string
                 description: Name of the token, if any
 
-    ErgoBoxWithSpendingProof:
+    ZyrexBoxWithSpendingProof:
       allOf:
-        - $ref: '#/components/schemas/ErgoTransactionOutput'
+        - $ref: '#/components/schemas/ZyrexTransactionOutput'
         - type: object
           description: Box indexed with extra information
           required:
@@ -253,9 +253,9 @@ components:
                 $ref: '#/components/schemas/TransactionBoxId'
 
 
-    IndexedErgoBox:
+    IndexedZyrexBox:
       allOf:
-        - $ref: '#/components/schemas/ErgoTransactionOutput'
+        - $ref: '#/components/schemas/ZyrexTransactionOutput'
         - type: object
           description: Box indexed with extra information
           required:
@@ -266,7 +266,7 @@ components:
             - globalIndex
           properties:
             address:
-              $ref: '#/components/schemas/ErgoAddress'
+              $ref: '#/components/schemas/ZyrexAddress'
             spentTransactionId:
               description: Transaction which spent the box
               nullable: true
@@ -330,7 +330,7 @@ components:
           minimum: 0
           example: 8
 
-    UnsignedErgoTransaction:
+    UnsignedZyrexTransaction:
       type: object
       description: Unsigned Zyrex transaction
       required:
@@ -344,21 +344,21 @@ components:
           description: Unsigned inputs of the transaction
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionUnsignedInput'
+            $ref: '#/components/schemas/ZyrexTransactionUnsignedInput'
         dataInputs:
           description: Data inputs of the transaction
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionDataInput'
+            $ref: '#/components/schemas/ZyrexTransactionDataInput'
         outputs:
           description: Outputs of the transaction
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionOutput'
+            $ref: '#/components/schemas/ZyrexTransactionOutput'
 
-    ErgoTransaction:
+    ZyrexTransaction:
       type: object
-      description: ErgoTransaction is an atomic operation which changes UTXO state.
+      description: ZyrexTransaction is an atomic operation which changes UTXO state.
       required:
         - inputs
         - dataInputs
@@ -371,19 +371,19 @@ components:
           description: Inputs, that will be spent by this transaction
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionInput'
+            $ref: '#/components/schemas/ZyrexTransactionInput'
         dataInputs:
           description: Read-only inputs, that are not going to be spent by transaction.
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionDataInput'
+            $ref: '#/components/schemas/ZyrexTransactionDataInput'
         outputs:
           description: Outputs of the transaction, i.e. box candidates to be created by this transaction.
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionOutput'
+            $ref: '#/components/schemas/ZyrexTransactionOutput'
         size:
-          description: Size of ErgoTransaction in bytes
+          description: Size of ZyrexTransaction in bytes
           type: integer
           format: int32
 
@@ -404,17 +404,17 @@ components:
           description: Transaction inputs
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionInput'
+            $ref: '#/components/schemas/ZyrexTransactionInput'
         dataInputs:
           description: Transaction data inputs
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionDataInput'
+            $ref: '#/components/schemas/ZyrexTransactionDataInput'
         outputs:
           description: Transaction outputs
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionOutput'
+            $ref: '#/components/schemas/ZyrexTransactionOutput'
         inclusionHeight:
           description: Height of a block the transaction was included in
           type: integer
@@ -437,7 +437,7 @@ components:
           type: integer
           format: int32
 
-    ErgoTransactionWithInputBoxes:
+    ZyrexTransactionWithInputBoxes:
         type: object
         description: Transaction indexed with extra information
         required:
@@ -453,17 +453,17 @@ components:
                 description: Transaction inputs
                 type: array
                 items:
-                    $ref: '#/components/schemas/ErgoBoxWithSpendingProof'
+                    $ref: '#/components/schemas/ZyrexBoxWithSpendingProof'
             dataInputs:
                 description: Transaction data inputs
                 type: array
                 items:
-                    $ref: '#/components/schemas/ErgoTransactionDataInput'
+                    $ref: '#/components/schemas/ZyrexTransactionDataInput'
             outputs:
                 description: Transaction outputs
                 type: array
                 items:
-                    $ref: '#/components/schemas/ErgoTransactionOutput'
+                    $ref: '#/components/schemas/ZyrexTransactionOutput'
             size:
                 description: Size in bytes
                 type: integer
@@ -479,7 +479,7 @@ components:
                 nullable: true
                 example: 21456
 
-    IndexedErgoTransaction:
+    IndexedZyrexTransaction:
       type: object
       description: Transaction indexed with extra information
       required:
@@ -501,17 +501,17 @@ components:
           description: Transaction inputs
           type: array
           items:
-            $ref: '#/components/schemas/IndexedErgoBox'
+            $ref: '#/components/schemas/IndexedZyrexBox'
         dataInputs:
           description: Transaction data inputs
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionDataInput'
+            $ref: '#/components/schemas/ZyrexTransactionDataInput'
         outputs:
           description: Transaction outputs
           type: array
           items:
-            $ref: '#/components/schemas/IndexedErgoBox'
+            $ref: '#/components/schemas/IndexedZyrexBox'
         inclusionHeight:
           description: Height of a block the transaction was included in
           type: integer
@@ -543,7 +543,7 @@ components:
           type: integer
           format: int32
 
-    ErgoAddress:
+    ZyrexAddress:
       description: Encoded Zyrex address
       type: string
       example: '3WwbzW6u8hKWBcL1W7kNVMr25s2UHfSBnYtwSHvrRQt7DdPuoXrt'
@@ -554,7 +554,7 @@ components:
         - rewardAddress
       properties:
         rewardAddress:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
 
     RewardPubKey:
       type: object
@@ -612,7 +612,7 @@ components:
         tx:
           description: Unsigned transaction to sign
           type: object
-          $ref: '#/components/schemas/UnsignedErgoTransaction'
+          $ref: '#/components/schemas/UnsignedZyrexTransaction'
         inputsRaw:
           description: Optional list of inputs to be used in serialized form
           type: array
@@ -650,7 +650,7 @@ components:
         - address
       properties:
         address:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
 
     BoxesRequestHolder:
       description: Holds request for wallet boxes
@@ -720,7 +720,7 @@ components:
           description: Sigma source to be compiled
           type: string
 
-    ErgoLikeTransaction:
+    ZyrexLikeTransaction:
       type: object
       required:
         - id
@@ -734,19 +734,19 @@ components:
         inputs:
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionInput'
+            $ref: '#/components/schemas/ZyrexTransactionInput'
         dataInputs:
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionDataInput'
+            $ref: '#/components/schemas/ZyrexTransactionDataInput'
         outputs:
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransactionOutput'
+            $ref: '#/components/schemas/ZyrexTransactionOutput'
 
     SigmaHeader:
       type: object
-      description: Block header format used for sigma ErgoLikeContext
+      description: Block header format used for sigma ZyrexLikeContext
       required:
         - timestamp
         - version
@@ -865,7 +865,7 @@ components:
           nullable: true
 
 
-    ErgoLikeContext:
+    ZyrexLikeContext:
       required:
         - lastBlockUtxoRoot
         - headers
@@ -896,18 +896,18 @@ components:
           type: array
           description: boxes, that corresponds to id's of `spendingTransaction.dataInputs`
           items:
-            type: ErgoBox
-            $ref: '#/components/schemas/ErgoTransactionOutput'
+            type: object
+            $ref: '#/components/schemas/ZyrexTransactionOutput'
         boxesToSpend:
           type: array
           description: boxes, that corresponds to id's of `spendingTransaction.inputs`
           items:
-            type: ErgoBox
-            $ref: '#/components/schemas/ErgoTransactionOutput'
+            type: object
+            $ref: '#/components/schemas/ZyrexTransactionOutput'
         spendingTransaction:
           type: object
           description: transaction that contains `self` box
-          $ref: '#/components/schemas/ErgoLikeTransaction'
+          $ref: '#/components/schemas/ZyrexLikeTransaction'
         selfIndex:
           type: integer
           format: int64
@@ -945,13 +945,13 @@ components:
           type: object
           nullable: true
         treeVersion:
-          description: ErgoScript version to be used in compiler
+          description: contract script version to be used in compiler
           nullable: true
         context:
           description: Interpreter context
           type: object
           nullable: true
-          $ref: '#/components/schemas/ErgoLikeContext'
+          $ref: '#/components/schemas/ZyrexLikeContext'
 
     CompileRequest:
       type: object
@@ -960,10 +960,10 @@ components:
         - treeVersion
       properties:
         source:
-          description: Source code of the ErgoScript to be compiled
+          description: Source code of the contract script to be compiled
           type: string
         treeVersion:
-          description: Version of ErgoTree to compile to
+          description: Version of ZyrexTree to compile to
           type: integer
           format: int8
 
@@ -1181,7 +1181,7 @@ components:
           items:
             type: integer
         box:
-          $ref: '#/components/schemas/ErgoTransactionOutput'
+          $ref: '#/components/schemas/ZyrexTransactionOutput'
 
     DlogCommitment:
       description: Randomness and commitment for the first step of the Schnorr protocol
@@ -1209,7 +1209,7 @@ components:
       properties:
         tx:
           description:  Transaction to extract prover hints from
-          $ref: '#/components/schemas/ErgoTransaction'
+          $ref: '#/components/schemas/ZyrexTransaction'
         real:
           description: Real signers of the transaction
           type: array
@@ -1348,7 +1348,7 @@ components:
         tx:
           description: Unsigned transaction to sign
           type: object
-          $ref: '#/components/schemas/UnsignedErgoTransaction'
+          $ref: '#/components/schemas/UnsignedZyrexTransaction'
         secrets:
           description: Optionally, external secrets used for signing
           type: object
@@ -1383,7 +1383,7 @@ components:
             - address
           properties:
             address:
-              $ref: '#/components/schemas/ErgoAddress'
+              $ref: '#/components/schemas/ZyrexAddress'
 
     PaymentRequest:
       description: Request for generation of payment transaction to a given address
@@ -1393,7 +1393,7 @@ components:
         - value
       properties:
         address:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
         value:
           description: Payment amount
           type: integer
@@ -1430,7 +1430,7 @@ components:
       properties:
         address:
           description: Optional, first address in the wallet will be used if not defined
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
         ergValue:
           description: Optional, amount of ergs to be put into box with issued assets
           format: int64
@@ -1948,7 +1948,7 @@ components:
           description: Optional BIP-39 passphrase (a.k.a. 25th word) mixed into the seed derivation. Distinct from `pass` and not stored by the node. Must match the value used when the mnemonic was originally generated, otherwise a different wallet will be restored silently.
         usePre1627KeyDerivation:
           type: boolean
-          description: Use the legacy (pre-EIP-3) BIP-32 key derivation that was the default before node v4.0.105. Set `true` only when restoring a wallet originally created on an older node; new wallets should use `false`. See https://github.com/ergoplatform/ergo/issues/1627 for details.
+          description: Use the legacy (pre-EIP-3) BIP-32 key derivation that was the default before node v4.0.105. Set `true` only when restoring a wallet originally created on an older node; new wallets should use `false`.
 
     CheckWallet:
       type: object
@@ -1987,7 +1987,7 @@ components:
         - address
       properties:
         address:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
 
     DeriveNextKeyResult:
       type: object
@@ -2000,7 +2000,7 @@ components:
           description: BIP-32 derivation path that was picked for the newly derived key.
           example: 'm/1/2'
         address:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
 
     MerkleProof:
       type: object
@@ -2488,37 +2488,37 @@ components:
       format: base16
       example: '2ab9da11fc216660e974842cc3b7705e62ebb9e0bf5ff78e53f9cd40abadd117'
 
-    ErgoTree:
-      description: Base16-encoded ergo tree bytes
+    ZyrexTree:
+      description: Base16-encoded contract script bytes
       type: string
       format: base16
       example: '0008cd0336100ef59ced80ba5f89c4178ebd57b6c1dd0f3d135ee1db9f62fc634d637041'
 
-    ErgoTreeObject:
+    ZyrexTreeObject:
       type: object
       properties:
         tree:
           type: string
-          description: serialized Ergo tree
+          description: serialized contract script
           example: '02a7955281885bf0f0ca4a48678848cad8dc5b328ce8bc1d4481d041c98e891ff3'
 
     Transactions:
-      description: List of ErgoTransaction objects
+      description: List of ZyrexTransaction objects
       type: array
       items:
-        $ref: '#/components/schemas/ErgoTransaction'
+        $ref: '#/components/schemas/ZyrexTransaction'
 
     TransactionsWithInputBoxes:
-      description: List of ErgoTransaction augmented with input boxes
+      description: List of ZyrexTransaction augmented with input boxes
       type: array
       items:
-        $ref: '#/components/schemas/ErgoTransactionWithInputBoxes'
+        $ref: '#/components/schemas/ZyrexTransactionWithInputBoxes'
 
     IndexedTransactions:
-      description: List of IndexedErgoTransaction objects
+      description: List of IndexedZyrexTransaction objects
       type: array
       items:
-        $ref: '#/components/schemas/IndexedErgoTransaction'
+        $ref: '#/components/schemas/IndexedZyrexTransaction'
 
 
     MiningRequest:
@@ -2532,7 +2532,7 @@ components:
           description: Transactions to include in the block candidate
           type: array
           items:
-            $ref: '#/components/schemas/ErgoTransaction'
+            $ref: '#/components/schemas/ZyrexTransaction'
         pk:
           description: Hexadecimal representation of public key to use as minerPk
           type: string
@@ -2693,7 +2693,7 @@ components:
         - isValid
       properties:
         address:
-          $ref: '#/components/schemas/ErgoAddress'
+          $ref: '#/components/schemas/ZyrexAddress'
         isValid:
           type: boolean
         error:
@@ -3268,7 +3268,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ErgoTransaction'
+              $ref: '#/components/schemas/ZyrexTransaction'
       responses:
         '200':
           description: JSON with ID of the new transaction
@@ -3322,7 +3322,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ErgoTransaction'
+              $ref: '#/components/schemas/ZyrexTransaction'
       responses:
         '200':
           description: JSON with ID of the new transaction
@@ -3443,7 +3443,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransactionWithInputBoxes'
+                $ref: '#/components/schemas/ZyrexTransactionWithInputBoxes'
         default:
           description: Error
           content:
@@ -3524,8 +3524,8 @@ paths:
           format: int32
           default: 0
     post:
-      summary: Finds unconfirmed transactions by ErgoTree hex of one of its output or input boxes (if present in UtxoState)
-      operationId: getUnconfirmedTransactionsByErgoTree
+      summary: Finds unconfirmed transactions by ZyrexTree hex of one of its output or input boxes (if present in UtxoState)
+      operationId: getUnconfirmedTransactionsByZyrexTree
       tags:
         - transactions
       requestBody:
@@ -3541,7 +3541,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransactionWithInputBoxes'
+                $ref: '#/components/schemas/ZyrexTransactionWithInputBoxes'
         default:
           description: Error
           content:
@@ -3568,7 +3568,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IndexedErgoBox'
+                $ref: '#/components/schemas/IndexedZyrexBox'
         default:
           description: Error
           content:
@@ -3595,7 +3595,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransactionOutput'
+                $ref: '#/components/schemas/ZyrexTransactionOutput'
         default:
           description: Error
           content:
@@ -3624,8 +3624,8 @@ paths:
           format: int32
           default: 0
     post:
-      summary: Finds all output boxes by ErgoTree hex among unconfirmed transactions
-      operationId: getUnconfirmedTransactionOutputBoxesByErgoTree
+      summary: Finds all output boxes by ZyrexTree hex among unconfirmed transactions
+      operationId: getUnconfirmedTransactionOutputBoxesByZyrexTree
       tags:
         - outputs
       requestBody:
@@ -3637,14 +3637,14 @@ paths:
               example: '100204a00b08cd021cf943317b0fdb50f60892a46b9132b9ced337c7de79248b104b293d9f1f078eea02d192a39a8cc7a70173007301'
       responses:
         '200':
-          description: Unconfirmed transaction output boxes that correspond to given ErgoTree hex
+          description: Unconfirmed transaction output boxes that correspond to given ZyrexTree hex
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  type: ErgoBox
-                  $ref: '#/components/schemas/ErgoTransactionOutput'
+                  type: object
+                  $ref: '#/components/schemas/ZyrexTransactionOutput'
         default:
           description: Error
           content:
@@ -3673,8 +3673,8 @@ paths:
               schema:
                 type: array
                 items:
-                  type: ErgoBox
-                  $ref: '#/components/schemas/ErgoTransactionOutput'
+                  type: object
+                  $ref: '#/components/schemas/ZyrexTransactionOutput'
         default:
           description: Error
           content:
@@ -3721,8 +3721,8 @@ paths:
               schema:
                 type: array
                 items:
-                  type: ErgoBox
-                  $ref: '#/components/schemas/ErgoTransactionOutput'
+                  type: object
+                  $ref: '#/components/schemas/ZyrexTransactionOutput'
         default:
           description: Error
           content:
@@ -4038,7 +4038,7 @@ paths:
           required: true
           description: address to check
           schema:
-            $ref: '#/components/schemas/ErgoAddress'
+            $ref: '#/components/schemas/ZyrexAddress'
       responses:
         '200':
           description: Address validity with validation error
@@ -4094,7 +4094,7 @@ paths:
           required: true
           description: address to extract public key from
           schema:
-            $ref: '#/components/schemas/ErgoAddress'
+            $ref: '#/components/schemas/ZyrexAddress'
       responses:
         '200':
           description: hex-encoded public key (serialized secp256k1 element)
@@ -4130,7 +4130,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoAddress'
+                $ref: '#/components/schemas/ZyrexAddress'
         default:
           description: Error
           content:
@@ -4140,15 +4140,15 @@ paths:
 
   /utils/ergoTreeToAddress/{ergoTreeHex}:
     get:
-      summary: Generate Zyrex address from hex-encoded ErgoTree (prefer POST request as ErgoTree can be too big)
-      operationId: ErgoTreeToAddressWithGet
+      summary: Generate Zyrex address from hex-encoded ZyrexTree (prefer POST request as ZyrexTree can be too big)
+      operationId: ZyrexTreeToAddressWithGet
       tags:
         - utils
       parameters:
         - in: path
           name: ergoTreeHex
           required: true
-          description: ErgoTree to derive an address from
+          description: ZyrexTree to derive an address from
           schema:
             type: string
             example: '100204a00b08cd021cf943317b0fdb50f60892a46b9132b9ced337c7de79248b104b293d9f1f078eea02d192a39a8cc7a70173007301'
@@ -4158,7 +4158,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoAddress'
+                $ref: '#/components/schemas/ZyrexAddress'
         default:
           description: Error
           content:
@@ -4168,13 +4168,13 @@ paths:
 
   /utils/ergoTreeToAddress:
     post:
-      summary: Generate Zyrex address from hex-encoded ErgoTree
-      operationId: ErgoTreeToAddress
+      summary: Generate Zyrex address from hex-encoded ZyrexTree
+      operationId: ZyrexTreeToAddress
       tags:
         - utils
       requestBody:
         required: true
-        description: ErgoTree hex to derive an address from
+        description: ZyrexTree hex to derive an address from
         content:
           application/json:
             schema:
@@ -4186,7 +4186,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoAddress'
+                $ref: '#/components/schemas/ZyrexAddress'
         default:
           description: Error
           content:
@@ -4455,7 +4455,7 @@ paths:
                 - address
               properties:
                 address:
-                  $ref: "#/components/schemas/ErgoAddress"
+                  $ref: "#/components/schemas/ZyrexAddress"
       responses:
         '200':
           description: Change address updated successfully
@@ -4951,7 +4951,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ErgoAddress'
+                  $ref: '#/components/schemas/ZyrexAddress'
         default:
           description: Error
           content:
@@ -4988,7 +4988,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransaction'
+                $ref: '#/components/schemas/ZyrexTransaction'
         '400':
           description: Bad transaction request
           content:
@@ -5023,7 +5023,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UnsignedErgoTransaction'
+                $ref: '#/components/schemas/UnsignedZyrexTransaction'
         '400':
           description: Bad transaction request
           content:
@@ -5065,7 +5065,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransaction'
+                $ref: '#/components/schemas/ZyrexTransaction'
         '400':
           description: Bad transaction request
           content:
@@ -5118,7 +5118,7 @@ paths:
     post:
       security:
         - ApiKeyAuth: [api_key]
-      summary: Generate and send payment transaction (default fee of 0.001 Erg is used)
+      summary: Generate and send payment transaction (default fee of 0.001 ZYRX is used)
       operationId: walletPaymentTransactionGenerateAndSend
       tags:
         - wallet
@@ -5383,7 +5383,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransactionOutput'
+                $ref: '#/components/schemas/ZyrexTransactionOutput'
         '404':
           description: Box with this id doesn't exist
           content:
@@ -5450,7 +5450,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTransactionOutput'
+                $ref: '#/components/schemas/ZyrexTransactionOutput'
         '404':
           description: Box with this id doesn't exist
           content:
@@ -5486,7 +5486,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ErgoTransactionOutput'
+                  $ref: '#/components/schemas/ZyrexTransactionOutput'
         '404':
           description: No any box exists for every id provided
           content:
@@ -5569,7 +5569,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ErgoTransactionOutput'
+                  $ref: '#/components/schemas/ZyrexTransactionOutput'
         '404':
           description: Box with this id doesn't exist
           content:
@@ -5651,7 +5651,7 @@ paths:
 
   /script/addressToTree/{address}:
     get:
-      summary: Convert an address to hex-encoded serialized ErgoTree (script)
+      summary: Convert an address to hex-encoded serialized ZyrexTree (script)
       operationId: addressToTree
       tags:
         - script
@@ -5661,14 +5661,14 @@ paths:
           required: true
           description: address to get a script from
           schema:
-            $ref: '#/components/schemas/ErgoAddress'
+            $ref: '#/components/schemas/ZyrexAddress'
       responses:
         '200':
-          description: Base16-encoded ErgoTree (script)
+          description: Base16-encoded ZyrexTree (script)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErgoTreeObject'
+                $ref: '#/components/schemas/ZyrexTreeObject'
         default:
           description: Error
           content:
@@ -5688,7 +5688,7 @@ paths:
           required: true
           description: address to get a script from
           schema:
-            $ref: '#/components/schemas/ErgoAddress'
+            $ref: '#/components/schemas/ZyrexAddress'
       responses:
         '200':
           description: Base16-encoded Sigma byte array constant which contains script bytes
@@ -6342,7 +6342,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IndexedErgoTransaction'
+                $ref: '#/components/schemas/IndexedZyrexTransaction'
         '404':
           description: Transaction with this id doesn't exist
           content:
@@ -6375,7 +6375,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IndexedErgoTransaction'
+                $ref: '#/components/schemas/IndexedZyrexTransaction'
         '404':
           description: Transaction with this index doesn't exist
           content:
@@ -6432,7 +6432,7 @@ paths:
                     type: array
                     description: Array of transactions
                     items:
-                      $ref: '#/components/schemas/IndexedErgoTransaction'
+                      $ref: '#/components/schemas/IndexedZyrexTransaction'
                   total:
                     type: integer
                     description: Total count of retrieved transactions
@@ -6508,7 +6508,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IndexedErgoBox'
+                $ref: '#/components/schemas/IndexedZyrexBox'
         '404':
           description: No box found with wanted id
           content:
@@ -6541,7 +6541,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IndexedErgoBox'
+                $ref: '#/components/schemas/IndexedZyrexBox'
         '404':
           description: Box with this index doesn't exist
           content:
@@ -6596,7 +6596,7 @@ paths:
                     type: array
                     description: Array of boxes
                     items:
-                      $ref: '#/components/schemas/IndexedErgoBox'
+                      $ref: '#/components/schemas/IndexedZyrexBox'
                   total:
                     type: integer
                     description: Total number of retreived boxes
@@ -6672,7 +6672,7 @@ paths:
                 type: array
                 description: Array of boxes
                 items:
-                  $ref: '#/components/schemas/IndexedErgoBox'
+                  $ref: '#/components/schemas/IndexedZyrexBox'
         '404':
           description: No unspent boxes found for wanted token
           content:
@@ -6729,7 +6729,7 @@ paths:
                     type: array
                     description: Array of boxes
                     items:
-                      $ref: '#/components/schemas/IndexedErgoBox'
+                      $ref: '#/components/schemas/IndexedZyrexBox'
                   total:
                     type: integer
                     description: Total number of retreived boxes
@@ -6807,7 +6807,7 @@ paths:
                 type: array
                 description: Array of boxes
                 items:
-                  $ref: '#/components/schemas/IndexedErgoBox'
+                  $ref: '#/components/schemas/IndexedZyrexBox'
         '404':
           description: No unspent boxes found for wanted address
           content:
@@ -6831,7 +6831,7 @@ paths:
         - in: path
           name: hash
           required: true
-          description: blake2b256 hash of an ErgoTree template encoded in base 16
+          description: blake2b256 hash of an ZyrexTree template encoded in base 16
           schema:
             $ref: '#/components/schemas/ModifierId'
         - in: query
@@ -6859,7 +6859,7 @@ paths:
                 type: array
                 description: Array of boxes
                 items:
-                  $ref: '#/components/schemas/IndexedErgoBox'
+                  $ref: '#/components/schemas/IndexedZyrexBox'
         '404':
           description: No boxes found for wanted template hash
           content:
@@ -6883,7 +6883,7 @@ paths:
         - in: path
           name: hash
           required: true
-          description: blake2b256 hash of an ErgoTree template encoded in base 16
+          description: blake2b256 hash of an ZyrexTree template encoded in base 16
           schema:
             $ref: '#/components/schemas/ModifierId'
         - in: query
@@ -6932,7 +6932,7 @@ paths:
                 type: array
                 description: Array of boxes
                 items:
-                  $ref: '#/components/schemas/IndexedErgoBox'
+                  $ref: '#/components/schemas/IndexedZyrexBox'
         '404':
           description: No unspent boxes found for wanted template hash
           content:
@@ -6988,13 +6988,13 @@ paths:
 
   /blockchain/box/byErgoTree:
     post:
-      summary: Retrieve boxes by their associated ergotree
-      operationId: getBoxesByErgoTree
+      summary: Retrieve boxes by their associated contract script
+      operationId: getBoxesByZyrexTree
       tags:
         - blockchain
       requestBody:
         required: true
-        description: hex encoded ergotree
+        description: hex encoded contract script
         content:
           application/json:
             schema:
@@ -7019,7 +7019,7 @@ paths:
             default: 5
       responses:
         '200':
-          description: boxes with wanted ergotree
+          description: boxes with wanted contract script
           content:
             application/json:
               schema:
@@ -7029,7 +7029,7 @@ paths:
                     type: array
                     description: Array of boxes
                     items:
-                      $ref: '#/components/schemas/IndexedErgoBox'
+                      $ref: '#/components/schemas/IndexedZyrexBox'
                   total:
                     type: integer
                     description: Total number of retreived boxes
@@ -7042,12 +7042,12 @@ paths:
 
   /blockchain/box/unspent/byErgoTree:
     post:
-      summary: Retrieve unspent boxes by their associated ergotree
-      operationId: getBoxesByErgoTreeUnspent
+      summary: Retrieve unspent boxes by their associated contract script
+      operationId: getBoxesByZyrexTreeUnspent
       tags:
         - blockchain
       requestBody:
-        description: hex encoded ergotree
+        description: hex encoded contract script
         required: true
         content:
           application/json:
@@ -7094,7 +7094,7 @@ paths:
             default: false
       responses:
         '200':
-          description: unspent boxes with wanted ergotree
+          description: unspent boxes with wanted contract script
           content:
             application/json:
               schema:
@@ -7104,12 +7104,12 @@ paths:
                     type: array
                     description: Array of boxes
                     items:
-                      $ref: '#/components/schemas/IndexedErgoBox'
+                      $ref: '#/components/schemas/IndexedZyrexBox'
                   total:
                     type: integer
                     description: Total number of retreived boxes
         '404':
-          description: No unspent box found with wanted ergotree
+          description: No unspent box found with wanted contract script
           content:
             application/json:
               schema:

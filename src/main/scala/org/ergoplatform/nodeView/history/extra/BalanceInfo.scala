@@ -13,7 +13,7 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 /**
-  * Class that tracks the ERG and token balances in [[IndexedErgoAddress]]
+  * Class that tracks the ZYRX and token balances in [[IndexedErgoAddress]]
   */
 case class BalanceInfo() extends ScorexLogging {
 

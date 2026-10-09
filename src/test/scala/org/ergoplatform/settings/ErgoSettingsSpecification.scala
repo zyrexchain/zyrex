@@ -17,7 +17,7 @@ class ErgoSettingsSpecification extends ErgoCorePropertyTest {
 
   property("should keep data user home  by default") {
     val settings = ErgoSettingsReader.read()
-    settings.directory shouldBe System.getProperty("user.dir") + "/.ergo_test/data"
+    settings.directory shouldBe System.getProperty("user.dir") + "/.zyrex_test/data"
   }
 
   property("should read default settings") {
@@ -62,7 +62,7 @@ class ErgoSettingsSpecification extends ErgoCorePropertyTest {
       )
     )
     settings.scorexSettings.restApi shouldBe RESTApiSettings(
-      bindAddress = new InetSocketAddress("0.0.0.0", 9052),
+      bindAddress = new InetSocketAddress("127.0.0.1", 19553),
       apiKeyHash = None,
       corsAllowedOrigin = Some("*"),
       timeout = 5.seconds,

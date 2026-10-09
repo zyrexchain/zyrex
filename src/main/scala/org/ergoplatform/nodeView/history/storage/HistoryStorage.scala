@@ -18,7 +18,7 @@ import java.nio.file.Files
 import scala.jdk.CollectionConverters.asScalaIteratorConverter
 
 /**
-  * Storage for Ergo history
+  * Blockchain history storage
   *
   * @param indexStore   - Additional key-value storage for indexes, required by History for efficient work.
   *                     contains links to bestHeader, bestFullBlock, heights and scores for different blocks, etc.

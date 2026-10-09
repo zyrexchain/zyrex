@@ -39,7 +39,7 @@ import scala.collection.breakOut
 /**
   * Implementation of minimal state concept in Scorex. Minimal state (or just state from now) is some data structure
   * enough to validate a new blockchain element(e.g. block).
-  * State in Ergo could be UTXO, like in Bitcoin or just a single digest. If the state is about UTXO, transaction set
+  * Node state can be UTXO, like in Bitcoin or just a single digest. If the state is about UTXO, transaction set
   * of a block could be verified with no help of additional data. If the state is about just a digest, then proofs for
   * transformations of UTXO set presented in form of authenticated dynamic dictionary are needed to check validity of
   * a transaction set (see https://eprint.iacr.org/2016/994 for details).
@@ -229,7 +229,7 @@ object ErgoState extends ScorexLogging {
   }
 
   /**
-    * Genesis box that contains all coins to be collected by Ergo foundation.
+    * Legacy genesis box that contains the upstream treasury allocation.
     * Box is protected by the script that allows to take part of them every block
     * and proposition from R4
     */
@@ -268,7 +268,7 @@ object ErgoState extends ScorexLogging {
   /**
     * Genesis state boxes generator.
     * Genesis state is corresponding to the state before the very first block processed.
-    * For Ergo mainnet, contains emission contract box, proof-of-no--premine box, and treasury contract box
+    * Zyrex uses one locked emission reserve; the legacy layout uses separate emission, proof and treasury boxes.
     */
   def genesisBoxes(chainSettings: ChainSettings): Seq[ErgoBox] = {
     chainSettings.zyrex match {

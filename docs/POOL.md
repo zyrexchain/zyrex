@@ -1,7 +1,7 @@
 # Zyrex mining pool
 
-The pool uses Autolykos v2 and the Ergo/Miningcore Stratum v1 wire format.
-Public-testnet deployment is in progress; the endpoints below are the public service addresses.
+The pool uses Autolykos v2 and the Miningcore-compatible Stratum v1 wire format.
+The endpoints below serve the public testnet.
 
 | Service | Endpoint |
 | --- | --- |
@@ -17,7 +17,7 @@ difficulty. TLS requires support from the chosen miner.
 
 The payout scheme is PROP with a 0% pool fee. SQLite persists accepted shares,
 rounds, balances and signed payouts. Consensus assigns 90% of the subsidy to
-the miner and 5% to each founder before pool distribution.
+miners and 10% to the team before pool distribution.
 
 Balances and share weights use integer units. A largest-remainder allocation
 conserves every nanoZYRX. Payout transaction fees are shared by recipients.
@@ -45,6 +45,6 @@ pool payouts. This does not verify every GPU model or miner implementation.
 ## Protocol provenance
 
 The wire format follows the upstream
-[Miningcore Ergo implementation](https://github.com/oliverw/miningcore/tree/a553f62301f44c6df80891e408b6526d1dd98692/src/Miningcore/Blockchain/Ergo).
+[Miningcore implementation](https://github.com/oliverw/miningcore).
 The pool is a separate Python implementation; Miningcore is not bundled.
-Autolykos verification follows Ergo's CC0 reference implementation.
+Autolykos verification follows the CC0 reference implementation identified in the README.

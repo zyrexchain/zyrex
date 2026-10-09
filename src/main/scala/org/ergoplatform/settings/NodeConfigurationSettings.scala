@@ -21,7 +21,7 @@ trait CheckpointingSettingsReader extends ModifierIdReader {
 }
 
 /**
-  * Configuration file for Ergo node regime
+  * Node operating-mode configuration
   *
   * @see src/main/resources/application.conf for parameters description
   */
@@ -62,7 +62,7 @@ case class NodeConfigurationSettings(override val stateType: StateType,
 }
 
 /**
-  * Custom config reader for ergo.node settings section
+  * Custom config reader for zyrex.node settings section
   */
 trait NodeConfigurationReaders extends StateTypeReaders with CheckpointingSettingsReader
                                   with UtxoSettingsReader with NipopowSettingsReader with ModifierIdReader {

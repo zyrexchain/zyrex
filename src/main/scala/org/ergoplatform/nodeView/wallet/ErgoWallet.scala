@@ -51,7 +51,7 @@ class ErgoWallet(historyReader: ErgoHistoryReader, settings: ErgoSettings, param
       case fb: ErgoFullBlock =>
         walletActor ! ScanOnChain(fb)
       case _ =>
-        log.debug("Not full block in ErgoWallet.scanPersistent, which could be the case only if " +
+        log.debug("Incomplete block during persistent wallet scanning, which could be the case only if " +
           "state = digest when bootstrapping")
     }
     this

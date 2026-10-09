@@ -20,7 +20,7 @@ import scala.util.{Failure, Success, Try}
   * @param trackingRule  - a predicate to scan the blockchain for specific scan-related boxes
   * @param walletInteraction - a flag which is prescribing how the scan is interacting with the p2pk-wallet
   * @param removeOffchain - a flag which prescribing whether box spent offchain should be removed from unspent boxes,
-  *                        see https://github.com/ergoplatform/ergo/issues/1314 , true by default
+  *                        true by default
   */
 case class Scan(scanId: ScanId,
                 scanName: String,

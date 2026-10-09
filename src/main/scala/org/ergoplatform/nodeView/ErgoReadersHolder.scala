@@ -51,7 +51,7 @@ class ErgoReadersHolder(viewHolderRef: ActorRef) extends Actor with ScorexLoggin
     case GetDataFromHistory(f) =>
       historyReaderOpt.fold(log.warn("Trying to get data from undefined history reader"))(sender ! f(_))
 
-    case a: Any => log.warn(s"ErgoReadersHolder got improper input: $a")
+    case a: Any => log.warn(s"Node readers holder got improper input: $a")
   }
 }
 

@@ -3,7 +3,7 @@ import sbt._
 
 logLevel := Level.Info
 
-// this values should be in sync with ergo-wallet/build.sbt
+// this values should be in sync with zyrex-wallet/build.sbt
 val scala212 = "2.12.20"
 val scala213 = "2.13.18"
 
@@ -45,7 +45,7 @@ val akkaHttpVersion = "10.2.4"
 val sigmaStateVersion = "6.0.7"
 val ficusVersion = "1.4.7"
 
-// for testing current sigmastate build (see sigmastate-ergo-it jenkins job)
+// Override the scripting library version for compatibility testing.
 val effectiveSigmaStateVersion = Option(System.getenv().get("SIGMASTATE_VERSION")).getOrElse(sigmaStateVersion)
 val effectiveSigma = "org.scorexfoundation" %% "sigma-state" % effectiveSigmaStateVersion
 
@@ -119,7 +119,7 @@ Compile / sourceGenerators += Def.task {
   Seq(versionFile)
 }
 
-assembly / mainClass := Some("org.ergoplatform.ErgoApp")
+assembly / mainClass := Some("org.zyrexchain.ZyrexApp")
 
 assembly / test := {}
 
@@ -205,11 +205,11 @@ docker / dockerfile := {
 
   new Dockerfile {
     from("eclipse-temurin:11-jre-jammy")
-    label("ergo-integration-tests", "ergo-integration-tests")
-    add(assembly.value, "/opt/ergo/ergo.jar")
-    add(Seq(configDevNet), "/opt/ergo")
-    add(Seq(configTestNet), "/opt/ergo")
-    add(Seq(configMainNet), "/opt/ergo")
+    label("zyrex-integration-tests", "zyrex-integration-tests")
+    add(assembly.value, "/opt/zyrex/zyrex.jar")
+    add(Seq(configDevNet), "/opt/zyrex")
+    add(Seq(configTestNet), "/opt/zyrex")
+    add(Seq(configMainNet), "/opt/zyrex")
   }
 }
 
@@ -264,10 +264,10 @@ lazy val avldb_benchmarks = (project in file("avldb/benchmarks"))
   .dependsOn(avldb)
   .enablePlugins(JmhPlugin)
 
-lazy val ergoCore = (project in file("ergo-core"))
+lazy val zyrexCore = (project in file("zyrex-core"))
   .disablePlugins(ScapegoatSbtPlugin) // not compatible with crossScalaVersions
   .dependsOn(avldb % "test->test;compile->compile")
-  .dependsOn(ergoWallet % "test->test;compile->compile")
+  .dependsOn(zyrexWallet % "test->test;compile->compile")
   .settings(
     crossScalaVersions := Seq(scala213, scalaVersion.value),
     commonSettings,
@@ -282,7 +282,7 @@ lazy val ergoCore = (project in file("ergo-core"))
     Test / parallelExecution := false,
   )
 
-lazy val ergoWallet = (project in file("ergo-wallet"))
+lazy val zyrexWallet = (project in file("zyrex-wallet"))
   .disablePlugins(ScapegoatSbtPlugin) // not compatible with crossScalaVersions
   .settings(
     crossScalaVersions := Seq(scala213, scalaVersion.value),
@@ -303,7 +303,7 @@ inConfig(It2Test)(Defaults.testSettings ++ Seq(
   scalacOptions ++= Seq("-Xasync")
 ))
 
-lazy val ergo = (project in file("."))
+lazy val zyrex = (project in file("."))
   .settings(
     commonSettings,
     name := "zyrex",
@@ -341,20 +341,13 @@ lazy val ergo = (project in file("."))
       "com.github.ben-manes.caffeine" % "caffeine" % "2.9.3" // use 3.x only for java 11+
     )
   )
-  .dependsOn(ergoCore % "test->test;compile->compile")
-  .dependsOn(ergoWallet % "test->test;compile->compile")
+  .dependsOn(zyrexCore % "test->test;compile->compile")
+  .dependsOn(zyrexWallet % "test->test;compile->compile")
   .dependsOn(avldb % "test->test;compile->compile")
   .configs(It2Test)
 
 
-// PGP key for signing a release build published to sonatype
-// signing is done by sbt-pgp plugin
-// how to generate a key - https://central.sonatype.org/pages/working-with-pgp-signatures.html
-// how to export a key and use it with Travis - https://docs.scala-lang.org/overviews/contributors/index.html#export-your-pgp-key-pair
-pgpPublicRing := file("ci/pubring.asc")
-pgpSecretRing := file("ci/secring.asc")
-pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toArray)
-usePgpKeyHex("D78982639AD538EF361DEC6BF264D529385A0333")
+// Signing uses the publisher's own configured PGP key.
 
 credentials ++= (for {
   username <- Option(System.getenv().get("SONATYPE_USERNAME"))

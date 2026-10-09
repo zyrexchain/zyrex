@@ -36,7 +36,7 @@ import scala.util.{Failure, Random, Try}
 
 class Docker(
   suiteConfig: Config                = ConfigFactory.empty,
-  tag: String                        = "ergo_integration_test",
+  tag: String                        = "zyrex_integration_test",
   localDataVolumeOpt: Option[String] = None
 )(implicit ec: ExecutionContext)
   extends AutoCloseable
@@ -268,8 +268,8 @@ class Docker(
       case _       => ""
     }
 
-    val shellCmd = "echo Options: $OPTS; java $OPTS -Dlibrary.leveldbjni.path=/opt/ergo -jar " +
-      s"$miscCmdOptions /opt/ergo/ergo.jar $networkTypeCmdOption -c /opt/ergo/${networkType.verboseName}Template.conf"
+    val shellCmd = "echo Options: $OPTS; java $OPTS -Dlibrary.leveldbjni.path=/opt/zyrex -jar " +
+      s"$miscCmdOptions /opt/zyrex/zyrex.jar $networkTypeCmdOption -c /opt/zyrex/${networkType.verboseName}Template.conf"
 
     client
       .createContainerCmd(ErgoImageLatest)
@@ -522,10 +522,10 @@ class Docker(
 
 object Docker extends IntegrationTestConstants {
 
-  val ErgoImageLatest: String = "org.ergoplatform/ergo"
+  val ErgoImageLatest: String = "org.zyrex/zyrex"
 
-  val dockerImageLabel          = "ergo-integration-tests"
-  val networkNamePrefix: String = "ergo-itest-"
+  val dockerImageLabel          = "zyrex-integration-tests"
+  val networkNamePrefix: String = "zyrex-itest-"
 
   type ExtraConfig = (Docker, Config) => Option[Config]
 

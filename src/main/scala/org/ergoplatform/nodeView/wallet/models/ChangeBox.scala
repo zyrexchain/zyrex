@@ -8,7 +8,7 @@ import scorex.util.ModifierId
 /**
   * Box model for Wallet API
   *
-  * @param value  - Amount of Ergs
+  * @param value  - Amount of ZYRX
   * @param tokens - IDs and amounts of other tokens
   */
 final case class ChangeBox(value: Long, tokens: Map[ModifierId, Long])

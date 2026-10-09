@@ -75,8 +75,8 @@ object ReemissionRulesUtils {
       r
     }.sum
 
-    val totalBlocks = total / 3 // 3 erg per block
-    println("Total reemission: " + total + " ERG")
+    val totalBlocks = total / 3 // 3 native coins per block
+    println("Total reemission: " + total + " coins")
     println("Total reemission is enough for: " + totalBlocks + " blocks (" + totalBlocks / 720.0 / 365.0 + " years")
 
     println(s"Emission at ${reemissionRules.reemissionStartHeight}: ${emissionRules.emissionAtHeight(reemissionRules.reemissionStartHeight)}")

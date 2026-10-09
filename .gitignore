@@ -48,9 +48,7 @@ my*.conf
 
 # db files
 *.data
-ergo/
-.ergo/
-.ergo_test/
+.zyrex_test/
 
 # for temporary experiments
 sheet.scala

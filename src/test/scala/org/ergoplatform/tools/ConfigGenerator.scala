@@ -35,13 +35,13 @@ object ConfigGenerator extends App with ErgoTestHelpers {
   private def template(digestMode: Boolean, mining: Boolean,
                        mnemonic: SecretString, apiKeyHash: String, nodeName: String): String =
     s"""
-       |ergo.node.stateType = "${if (digestMode) "digest" else "utxo"}"
-       |ergo.node.mining = ${if (mining) "true" else "false"}
-       |ergo.node.offlineGeneration = true
-       |ergo.node.useExternalMiner = false
-       |ergo.testing.transactionGeneration = true
-       |ergo.wallet.testMnemonic = "$mnemonic"
-       |ergo.wallet.testKeysQty = 10
+       |zyrex.node.stateType = "${if (digestMode) "digest" else "utxo"}"
+       |zyrex.node.mining = ${if (mining) "true" else "false"}
+       |zyrex.node.offlineGeneration = true
+       |zyrex.node.useExternalMiner = false
+       |zyrex.testing.transactionGeneration = true
+       |zyrex.wallet.testMnemonic = "$mnemonic"
+       |zyrex.wallet.testKeysQty = 10
        |scorex.restApi.apiKeyHash = "$apiKeyHash"
        |scorex.network.nodeName = "$nodeName"
      """.stripMargin

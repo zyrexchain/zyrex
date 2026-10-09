@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check published text for Cyrillic and operator-specific documentation endpoints."""
+"""Check public language, branding and operator-specific documentation endpoints."""
 import ipaddress
 import re
 import subprocess
@@ -18,6 +18,14 @@ def main():
             continue
         if re.search(r'[\u0400-\u052f]', text):
             failures.append(f'{name}: public text contains Cyrillic')
+        branding_surface = (
+            path.suffix == '.md' or name.startswith('src/main/resources/panel/') or
+            name.startswith('config/') or name.startswith('src/main/resources/api/') or
+            (name.startswith('src/main/resources/') and path.suffix == '.conf')
+        )
+        if name != 'README.md' and branding_surface:
+            if re.search(r'\bergo(?:script)?\b|\berg\b|\bergoplatform\b', text, re.IGNORECASE):
+                failures.append(f'{name}: public branding refers to the original product')
         if path.suffix == '.md':
             for value in re.findall(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])', text):
                 try:

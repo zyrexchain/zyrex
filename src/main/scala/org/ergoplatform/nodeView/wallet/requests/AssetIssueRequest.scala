@@ -12,7 +12,7 @@ import sigma.ast.{EvaluatedValue, SType}
 /**
   * Request for new asset issuing.
   *
-  * Ergo token data is stored in registers in the following way:
+  * Issued token data is stored in registers in the following way:
   * R2 - ID and supply amount
   * R4 - verbose name
   * R5 - description

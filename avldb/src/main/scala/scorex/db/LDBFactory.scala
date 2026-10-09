@@ -10,7 +10,7 @@ import scala.collection.mutable
 /**
   * Registry of opened LevelDB instances.
   * LevelDB prohibit access to the same storage file from more than one DB instance.
-  * And ergo application (mostly tests) quite frequently doesn't not explicitly close
+  * The node application (mostly tests) frequently does not explicitly close
   * database and tries to reopen it.
   */
 case class StoreRegistry(factory: DBFactory) extends DBFactory with ScorexLogging {
@@ -138,7 +138,7 @@ object LDBFactory extends ScorexLogging {
   lazy val factory: DBFactory = {
     val loaders = List(ClassLoader.getSystemClassLoader, this.getClass.getClassLoader)
 
-    // As LevelDB-JNI has problems on Mac (see https://github.com/ergoplatform/ergo/issues/1067),
+    // As LevelDB-JNI has problems on macOS,
     // we are using only pure-Java LevelDB on Mac
     val isMac = System.getProperty("os.name").toLowerCase().indexOf("mac") >= 0
     val factories = if(isMac) {

@@ -2,7 +2,7 @@
 
 Zyrex is an independent Proof of Work blockchain inspired by
 [Ergo](https://github.com/ergoplatform/ergo) and built from its open-source code.
-It retains eUTXO, ErgoScript and Autolykos v2.
+It retains eUTXO, programmable contracts and Autolykos v2.
 
 | Tokenomics | Value |
 | --- | --- |
@@ -14,7 +14,7 @@ It retains eUTXO, ErgoScript and Autolykos v2.
 | Halving | Every 432,000 blocks |
 | Maximum supply | 86,400,000 ZYRX theoretical |
 | Exact integer emission | 86,399,999.99352 ZYRX |
-| Difficulty adjustment | Ergo DAA adapted to 60 seconds |
+| Difficulty adjustment | Original DAA adapted to 60 seconds |
 
 Team payments are enforced by consensus. All rewards use integer nanoZYRX units.
 

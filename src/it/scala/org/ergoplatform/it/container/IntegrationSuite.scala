@@ -24,7 +24,7 @@ trait IntegrationSuite
     .filter(_.nonEmpty)
     .getOrElse(System.getProperty("java.io.tmpdir"))
 
-  protected val localDataDir: String = s"$tempDir/ergo-${Random.nextInt(Int.MaxValue)}"
+  protected val localDataDir: String = s"$tempDir/zyrex-${Random.nextInt(Int.MaxValue)}"
 
   protected val docker: Docker = new Docker(tag = getClass.getSimpleName, localDataVolumeOpt = Some(localDataDir))
 

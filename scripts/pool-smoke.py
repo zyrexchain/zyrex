@@ -202,7 +202,7 @@ def verify(args, miners):
             payments.append(payout["id"])
         assert payments
         received.append({"address": address, "confirmedPayments": payments})
-    report = {"stratumUrl": stats["stratumUrl"], "wireProtocol": "Ergo/Miningcore Stratum v1",
+    report = {"stratumUrl": stats["stratumUrl"], "wireProtocol": "Autolykos/Miningcore Stratum v1",
               "gpuVerified": False, "height": stats["nodeHeight"],
               "miners": miners, "restartVerified": restarted,
               "blocks": stats["blocks"], "payouts": stats["payouts"], "receivingWallets": received,

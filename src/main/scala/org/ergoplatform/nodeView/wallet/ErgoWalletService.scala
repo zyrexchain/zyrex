@@ -69,7 +69,7 @@ trait ErgoWalletService {
     * @param mnemonic that was used to initialize wallet with
     * @param mnemonicPassOpt that was used to initialize wallet with
     * @param walletPass that was used to initialize wallet with
-    * @param usePre1627KeyDerivation - use incorrect(previous) BIP32 derivation, expected to be false for new wallets, and true for old pre-1627 wallets (see https://github.com/ergoplatform/ergo/issues/1627 for details)
+    * @param usePre1627KeyDerivation - use incorrect(previous) BIP32 derivation, expected to be false for new wallets, and true for old pre-1627 wallets
     * @return new wallet state
     */
   def restoreWallet(state: ErgoWalletState,
@@ -337,7 +337,7 @@ class ErgoWalletServiceImpl(override val ergoSettings: ErgoSettings) extends Erg
         .toMnemonic(entropy)
         .flatMap { mnemonic =>
           initStorage(mnemonic).flatMap { newSecretStorage =>
-            // remove old wallet state, see https://github.com/ergoplatform/ergo/issues/1313
+            // remove old wallet state
             recreateRegistry(state, settings).flatMap { stateV1 =>
               recreateStorage(stateV1, settings).map { stateV2 =>
                 mnemonic -> stateV2.copy(secretStorageOpt = Some(newSecretStorage), walletVars = stateV2.walletVars.copy(stateCacheProvided = stateV2.walletVars.stateCacheOpt)(settings))
@@ -361,7 +361,7 @@ class ErgoWalletServiceImpl(override val ergoSettings: ErgoSettings) extends Erg
     } else {
       Try(JsonSecretStorage.restore(mnemonic, mnemonicPassOpt, walletPass, settings.walletSettings.secretStorage, usePre1627KeyDerivation))
         .flatMap { secretStorage =>
-          // remove old wallet state, see https://github.com/ergoplatform/ergo/issues/1313
+          // remove old wallet state
           recreateRegistry(state, settings).flatMap { stateV1 =>
             recreateStorage(stateV1, settings).map { stateV2 =>
               stateV2.copy(secretStorageOpt = Some(secretStorage), walletVars = stateV2.walletVars.copy(stateCacheProvided = stateV2.walletVars.stateCacheOpt)(settings))

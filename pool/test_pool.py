@@ -90,7 +90,7 @@ class NodeReadinessTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.node.ready()
         self.info["bestFullHeaderId"] = "applied"
-        self.info["genesisBlockId"] = "ergo"
+        self.info["genesisBlockId"] = "foreign-chain"
         with self.assertRaises(RuntimeError):
             self.node.ready()
 
@@ -246,7 +246,7 @@ class AccountingTests(unittest.TestCase):
         self.ledger.bind_network("zyrex-genesis", PK)
         self.ledger.bind_network("zyrex-genesis", PK)
         with self.assertRaises(RuntimeError):
-            self.ledger.bind_network("ergo-genesis", PK)
+            self.ledger.bind_network("foreign-genesis", PK)
 
     def test_gpu_status_requires_matching_identity_block_and_paid_address(self):
         self.ledger.bind_network("genesis", PK)

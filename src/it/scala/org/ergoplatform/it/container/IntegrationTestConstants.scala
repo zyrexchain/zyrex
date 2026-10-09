@@ -11,8 +11,8 @@ trait IntegrationTestConstants {
 
   val walletAutoInitConfig: Config = ConfigFactory.parseString(
     s"""
-       |ergo.wallet.testMnemonic = "ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic"
-       |ergo.wallet.testKeysQty = 5
+       |zyrex.wallet.testMnemonic = "ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic"
+       |zyrex.wallet.testKeysQty = 5
     """.stripMargin
   )
 
@@ -47,51 +47,51 @@ trait IntegrationTestConstants {
 
   def specialDataDirConfig(dir: String): Config = ConfigFactory.parseString(
     s"""
-       |ergo.directory=$dir
+       |zyrex.directory=$dir
     """.stripMargin
   )
 
   def prunedHistoryConfig(blocksToKeep: Int): Config = ConfigFactory.parseString(
     s"""
-       |ergo.node.blocksToKeep=$blocksToKeep
+       |zyrex.node.blocksToKeep=$blocksToKeep
     """.stripMargin
   )
 
   def internalMinerPollingIntervalConfig(millis: Int): Config = ConfigFactory.parseString(
     s"""
-      |ergo.node.internalMinerPollingInterval=${millis}ms
+      |zyrex.node.internalMinerPollingInterval=${millis}ms
     """.stripMargin
   )
 
   def blockIntervalConfig(millis: Int): Config = ConfigFactory.parseString(
     s"""
-       |ergo.chain.blockInterval=${millis}ms
+       |zyrex.chain.blockInterval=${millis}ms
     """.stripMargin
   )
 
   def keepVersionsConfig(keepVersions: Int): Config = ConfigFactory.parseString(
     s"""
-       |ergo.node.keepVersions=$keepVersions
+       |zyrex.node.keepVersions=$keepVersions
     """.stripMargin
   )
 
   val nonGeneratingPeerConfig: Config = ConfigFactory.parseString(
     """
-      |ergo.node.mining=false
+      |zyrex.node.mining=false
     """.stripMargin
   )
 
   val onlineGeneratingPeerConfig: Config = ConfigFactory.parseString(
     """
-      |ergo.node.mining=true
-      |ergo.node.offlineGeneration=false
+      |zyrex.node.mining=true
+      |zyrex.node.offlineGeneration=false
     """.stripMargin
   )
 
   val offlineGeneratingPeerConfig: Config = ConfigFactory.parseString(
     """
-      |ergo.node.mining=true
-      |ergo.node.offlineGeneration=true
+      |zyrex.node.mining=true
+      |zyrex.node.offlineGeneration=true
     """.stripMargin
   )
 
@@ -99,7 +99,7 @@ trait IntegrationTestConstants {
 
   val digestStatePeerConfig: Config = ConfigFactory.parseString(
     """
-      |ergo.node.stateType = "digest"
+      |zyrex.node.stateType = "digest"
     """.stripMargin
   )
 

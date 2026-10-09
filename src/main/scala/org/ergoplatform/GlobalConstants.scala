@@ -1,7 +1,7 @@
 package org.ergoplatform
 
 /**
-  * A singleton which holds constants needed around the whole Ergo Platform.
+  * A singleton which holds constants needed around the whole Zyrex node.
   */
 object GlobalConstants {
 

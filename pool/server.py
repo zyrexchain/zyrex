@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Zyrex LAN pool: Ergo Stratum v1, CPU share verification, durable PROP payouts."""
+"""Zyrex pool: Autolykos Stratum v1, CPU share verification, durable PROP payouts."""
 import argparse
 import asyncio
 import ipaddress
@@ -144,7 +144,7 @@ class Client:
         if not re.fullmatch(r"[0-9a-f]{16}", nonce_hex) or not nonce_hex.startswith(self.prefix):
             raise StratumError(20, "Nonce must contain the assigned extranonce1 and be 8 bytes")
         # Miningcore miners send the full nonce as the fifth parameter. The second
-        # extranonce and ntime fields are placeholders, as in ErgoPool/ErgoJob.
+        # extranonce and ntime fields are placeholders, as required by the compatible mining wire format.
         score = await asyncio.to_thread(hit, bytes.fromhex(work["msg"]), bytes.fromhex(nonce_hex), work["h"])
         if score >= target:
             raise StratumError(23, "Low difficulty share")

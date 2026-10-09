@@ -89,7 +89,7 @@ abstract class ErgoNodeViewHolder[State <: ErgoState[State]](settings: ErgoSetti
     }
 
   override def postStop(): Unit = {
-    log.warn("Stopping ErgoNodeViewHolder")
+    log.warn("Stopping the node view holder")
     history().closeStorage()
     minimalState().closeStorage()
   }
@@ -233,7 +233,7 @@ abstract class ErgoNodeViewHolder[State <: ErgoState[State]](settings: ErgoSetti
       case (success@Success(updateInfo), modToApply) =>
         if (updateInfo.failedMod.isEmpty) {
           val chainTipOpt = history.estimatedTip()
-          // todo: make cleaner ADProofs dump instead of pmodModify , see https://github.com/ergoplatform/ergo/issues/2413
+          // todo: make a cleaner ADProofs dump instead of pmodModify
           updateInfo.state.applyModifier(modToApply, chainTipOpt)(lm => pmodModify(lm.pmod, local = true)) match {
             case Success(stateAfterApply) =>
               history.reportModifierIsValid(modToApply).map { newHis =>

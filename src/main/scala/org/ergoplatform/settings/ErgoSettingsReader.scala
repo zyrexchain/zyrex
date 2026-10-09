@@ -70,7 +70,7 @@ object ErgoSettingsReader extends ScorexLogging
 
     val keystorePath = "zyrex.wallet.secretStorage.secretDir"
 
-    // Check that user-provided Ergo directory exists and has write access (if provided at all)
+    // Check that user-provided node directory exists and has write access (if provided at all)
     val userDirOpt = Try(cfg.getString("zyrex.directory")).toOption
     userDirOpt.foreach { ergoDirName =>
       require(new File(s"$ergoDirName").canWrite, s"Folder $ergoDirName does not exist or not writable")
@@ -90,8 +90,8 @@ object ErgoSettingsReader extends ScorexLogging
       .withFallback(ConfigFactory.defaultReference())
       .resolve()
 
-    // If user provided only ergo.directory but not ergo.wallet.secretStorage.secretDir in his config,
-    // set ergo.wallet.secretStorage.secretDir like in reference.conf (so ergo.directory + "/wallet/keystore")
+    // If user provided only zyrex.directory but not zyrex.wallet.secretStorage.secretDir in his config,
+    // set zyrex.wallet.secretStorage.secretDir like in reference.conf (so zyrex.directory + "/wallet/keystore")
     // Otherwise, a user may have an issue, especially with Powershell it seems from reports.
     userDirOpt.map { userDir =>
       if(walletKeystoreDirOpt.isEmpty) {
@@ -181,7 +181,7 @@ object ErgoSettingsReader extends ScorexLogging
     } else if(settings.networkType.isMainNet &&
       nodeSettings.mining && settings.chainSettings.zyrex.isEmpty &&
       !settings.chainSettings.reemission.checkReemissionRules) {
-      failWithError(s"Mining is enabled, but ergo.chain.reemission.checkReemissionRules = false , set it to true")
+      failWithError(s"Mining is enabled, but zyrex.chain.reemission.checkReemissionRules = false , set it to true")
     } else if (settings.scorexSettings.restApi.publicUrl.exists(invalidRestApiUrl)) {
       failWithError(s"scorex.restApi.publicUrl should not contain query, path or fragment and should not " +
         s"be local or loopback address : ${settings.scorexSettings.restApi.publicUrl.get}")

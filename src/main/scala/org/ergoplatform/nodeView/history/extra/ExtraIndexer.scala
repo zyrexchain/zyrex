@@ -272,7 +272,7 @@ trait ExtraIndexerBase extends Actor with Stash with ScorexLogging {
       (((((general ++= boxes.values) ++= trees.values) ++= templates.values) ++= tokens.values) ++= segments.values).toArray
     )
 
-    log.debug(s"Processed ${trees.size} ErgoTrees with ${boxes.size} boxes and inserted them to database in ${System.currentTimeMillis - start}ms")
+    log.debug(s"Processed ${trees.size} scripts with ${boxes.size} boxes and inserted them to database in ${System.currentTimeMillis - start}ms")
 
     // clear buffers for next batch
     general.clear()
@@ -578,7 +578,7 @@ trait ExtraIndexerBase extends Actor with Stash with ScorexLogging {
   * Actor that constructs an index of database elements.
   *
   * @param cacheSettings - cacheSettings to use for saveLimit size
-  * @param ae            - ergo address encoder to use for handling addresses
+  * @param ae            - address encoder to use for handling addresses
   */
 class ExtraIndexer(cacheSettings: CacheSettings,
                    ae: ErgoAddressEncoder)

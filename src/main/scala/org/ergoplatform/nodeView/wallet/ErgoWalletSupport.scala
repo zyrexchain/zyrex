@@ -271,7 +271,7 @@ trait ErgoWalletSupport extends ScorexLogging {
     * @param requests      - requests to transfer funds or to issue an asset
     * @param inputsRaw     - user-provided inputs. If empty then wallet is looking for inputs itself. If non-empty, then
     *                      the wallet is not adding anything, thus the user in this case should take care about satisfying
-    *                      the (sum(inputs) == sum(outputs)) preservation rule for ergs.
+    *                      the (sum(inputs) == sum(outputs)) preservation rule for ZYRX.
     * @param dataInputsRaw - user-provided data (read-only) inputs. Wallet is not able to figure out needed data inputs
     *                      (to spend the spendable inputs).
     * @return generated transaction along with its inputs and data-inputs, or an error

@@ -352,8 +352,8 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
           this -> new ProcessingOutcome.Declined(exc, validationStartTime)
         }
       } else {
-        val exc = new Exception(s"Min fee not met: ${minFee.toDouble / CoinsInOneErgo} ergs required, " +
-          s"${fee.toDouble / CoinsInOneErgo} ergs given")
+        val exc = new Exception(s"Min fee not met: ${minFee.toDouble / CoinsInOneErgo} ZYRX required, " +
+          s"${fee.toDouble / CoinsInOneErgo} ZYRX given")
 
         this -> new ProcessingOutcome.Declined(exc, validationStartTime)
       }
