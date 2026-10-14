@@ -16,6 +16,8 @@ jobs:
           cache: false
       - name: Check English public content
         run: python3 scripts/check-public-content.py
+      - name: Verify signed Python client recovery and Auto fees
+        run: python3 scripts/test-wallet-client.py
       - name: Test exact amounts, node pinning and credential isolation
         working-directory: cli
         run: go test ./...

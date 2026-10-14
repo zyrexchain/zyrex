@@ -13,7 +13,25 @@ solutions survive a disconnected share-acknowledgement socket. Graceful shutdown
 drains admitted writes and the native submission before closing executors. Work-result
 diagnostics distinguish stale, duplicate, invalid and resource-limited shares
 and are explicitly scoped to the current pool process lifetime. These changes
-do not alter consensus, emission, difficulty or transaction fee policy.
+preserve the live consensus and emission rules.
+
+Automatic transaction fees quote the exact native signed size, bounded recent
+inclusions and current mempool pressure. Desktop and CLI confirmation bind the
+recipient, fee and signed transaction ID; uncertain submissions preserve the
+same signed transaction for explicit history checks and retry. Pool Auto fees
+are capped and deducted proportionally from recipients before reservation.
+Pending pool payments retain their original signed bytes and fee on retry.
+
+Private accounting backups include uncheckpointed SQLite WAL data and preserve
+pending signed payouts. Verification pins identity, bytes, integrity and row
+counts; recovery requires a fresh destination and never overwrites a live database.
+Synthetic TCP bursts check bounded admission and responsive miner history during
+blocked PoW verification. They do not measure GPU throughput or production capacity.
+
+Native releases include a resolved-library CycloneDX inventory and upstream
+database notices. The inventory identifies exact external JAR bytes; offline
+inventory is separate from an online vulnerability audit and excludes the JDK,
+operating system and native database binary dependencies.
 
 Private CI uses a disposable four-node network with its native sixty-second
 target. The pool check allows thirty minutes for proof search, competition with
@@ -28,8 +46,8 @@ recovery phrases. Mainnet and its template parameters remain unapproved.
 
 | Component | Verified scope | Remaining scope |
 | --- | --- | --- |
-| Native node | Selected consensus, network, PoW and DAA suites; private integration | Full inherited regression and dependency audit |
-| Pool | TCP protocol, bounded local abuse, payouts, restart and reorganization regressions | Production-scale load and independent infrastructure |
+| Native node | Full inherited node/core/wallet/database regressions; focused fork suites; private integration | Independent security review and final mainnet parameters |
+| Pool | TCP bursts, bounded local abuse, capped fees, durable payouts, restart and reorganization regressions | Production-scale load and independent infrastructure |
 | Explorer | Canonical indexing, P2PK/P2S/P2SH, spend and rollback | Long-history capacity |
 | Ubuntu desktop | Native packaging, installation, GUI and bundled node checks | Broader desktop environments |
 | Windows desktop | Native packaging, installation, GUI and bundled node checks | Broader Windows configurations |
@@ -42,8 +60,12 @@ controlled failed-peer tests. A checkpoint below height 385 cannot demonstrate
 three completed transitions of both public epoch schedules.
 
 The inherited legacy DAA remains live. Native simulations in [DAA.md](DAA.md)
-expose slow reaction and fallback behavior; the guarded EIP-37 model is a candidate,
-not an activated consensus change or a mainnet-readiness result.
+expose slow reaction and fallback behavior. The guarded EIP-37 activation hook
+and optional shorter epochs are disabled in every source profile. Native header
+and fork tests verify selection and rejection around activation boundaries;
+these results do not authorize activation or establish mainnet readiness.
+[Calendar evidence](CALENDAR.md) records unchanged height schedules at the
+sixty-second target and native integer emission validation through its final nano-units.
 
 Private vulnerability reporting is currently disabled in the GitHub repository.
 A verified private reporting channel is required before broader public promotion;

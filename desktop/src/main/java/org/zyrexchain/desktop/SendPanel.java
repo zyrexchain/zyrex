@@ -20,12 +20,15 @@ import javax.swing.JTextField;
 import javax.swing.JViewport;
 import javax.swing.Scrollable;
 import javax.swing.SwingUtilities;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.text.View;
 
 /** An exact integer transfer form; the native wallet validates and signs the transaction. */
 final class SendPanel extends JPanel {
     interface Host {
         void confirmSend(String address, long amount, long fee, Consumer<String> success);
+        default void retrySend(Consumer<String> success) { }
     }
 
     private final Host host;
@@ -38,12 +41,15 @@ final class SendPanel extends JPanel {
     private final JTextField transaction = Ui.textField("sent-transaction", 0);
     private final JButton review = Ui.button("Review transaction", "send-review", true);
     private final JButton copyTransaction = Ui.button("Copy transaction ID", "copy-transaction", false);
+    private final JButton retry = Ui.button("Check / retry saved transaction", "send-retry", false);
     private final Form content = new Form();
     private final JScrollPane scroll = new JScrollPane(content,
         JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
     private long balance;
     private boolean ready;
     private boolean showingTransactionStatus;
+    private boolean retryAvailable;
+    private long revision;
 
     SendPanel(Host host) {
         super(new BorderLayout());
@@ -58,11 +64,17 @@ final class SendPanel extends JPanel {
         JTextArea introduction = message("Send testnet coins from your wallet. Review the recipient, amount and fee before confirming.");
         introduction.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
         put(form, introduction, 1);
-        fee.setText("0.001");
+        fee.setText("auto");
+        DocumentListener edits = new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent event) { revision++; }
+            @Override public void removeUpdate(DocumentEvent event) { revision++; }
+            @Override public void changedUpdate(DocumentEvent event) { revision++; }
+        };
+        for (JTextField input : new JTextField[] {recipient, amount, fee}) input.getDocument().addDocumentListener(edits);
         put(form, field("Recipient address", recipient), 2);
         put(form, field("Amount · ZYRX", amount), 3);
         put(form, available, 4);
-        put(form, field("Network fee · ZYRX", fee), 5);
+        put(form, field("Network fee · auto or ZYRX", fee), 5);
         put(form, notice, 6);
         review.addActionListener(event -> reviewTransfer());
         review.setEnabled(false);
@@ -82,6 +94,9 @@ final class SendPanel extends JPanel {
             }
         });
         put(form, copyTransaction, 10);
+        retry.setVisible(false);
+        retry.addActionListener(event -> host.retrySend(this::submitted));
+        put(form, retry, 11);
         scroll.setName("send-scroll");
         scroll.setBorder(BorderFactory.createEmptyBorder());
         scroll.setOpaque(false);
@@ -97,7 +112,16 @@ final class SendPanel extends JPanel {
         notice.setText(ready ? "Network fee is paid in addition to the amount." : reason);
         notice.setForeground(ready ? Ui.MUTED : Ui.WARNING);
         review.setEnabled(ready && balance > 0);
+        retry.setEnabled(ready && retryAvailable);
         if (ready && balance == 0) notice.setText("Receive testnet ZYRX before sending a transaction.");
+    }
+
+    long reviewRevision() { return revision; }
+
+    void setRetryAvailable(boolean available) {
+        retryAvailable = available;
+        retry.setVisible(available);
+        retry.setEnabled(ready && available);
     }
 
     private void reviewTransfer() {
@@ -106,29 +130,33 @@ final class SendPanel extends JPanel {
             String address = recipient.getText().strip();
             NodeApi.validateAddress(address);
             long value = Units.parse(amount.getText().strip());
-            long feeValue = Units.parse(fee.getText().strip());
+            String requestedFee = fee.getText().strip();
+            boolean automatic = requestedFee.equalsIgnoreCase("auto");
+            long feeValue = automatic ? 0 : Units.parse(requestedFee);
             if (value <= 0) throw new IllegalArgumentException("Enter an amount greater than zero.");
-            if (feeValue < 1_000_000L) throw new IllegalArgumentException("The network fee must be at least 0.001 ZYRX.");
-            long total = Math.addExact(value, feeValue);
+            if (!automatic && feeValue < Units.DEFAULT_FEE) throw new IllegalArgumentException("The network fee must be at least 0.001 ZYRX.");
+            long total = Math.addExact(value, automatic ? Units.DEFAULT_FEE : feeValue);
             if (total > balance) throw new IllegalArgumentException("The amount plus network fee exceeds your confirmed balance.");
             showingTransactionStatus = false;
             resultLabel.setText(" ");
-            host.confirmSend(address, value, feeValue, id -> {
-                recipient.setText("");
-                amount.setText("");
-                transaction.setText(id);
-                transaction.setVisible(true);
-                copyTransaction.setVisible(true);
-                resultLabel.setForeground(Ui.ACCENT);
-                resultLabel.setText("Submitted to the node. Waiting for a block confirmation.");
-                showingTransactionStatus = true;
-                showResult();
-            });
+            host.confirmSend(address, value, feeValue, this::submitted);
         } catch (ArithmeticException failure) {
             showError("The amount plus fee is too large.");
         } catch (IllegalArgumentException failure) {
             showError(failure.getMessage());
         }
+    }
+
+    private void submitted(String id) {
+        recipient.setText("");
+        amount.setText("");
+        transaction.setText(id);
+        transaction.setVisible(true);
+        copyTransaction.setVisible(true);
+        resultLabel.setForeground(Ui.ACCENT);
+        resultLabel.setText("Submitted to the node. Waiting for a block confirmation.");
+        showingTransactionStatus = true;
+        showResult();
     }
 
     void showError(String message) {

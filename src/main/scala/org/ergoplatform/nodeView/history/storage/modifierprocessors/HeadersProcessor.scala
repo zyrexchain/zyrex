@@ -337,7 +337,22 @@ trait HeadersProcessor extends ToDownloadProcessor with PopowProcessor with Scor
 
     val eip37ActivationHeight = 844673
 
-    if (chainSettings.zyrex.isEmpty && settings.networkType.isMainNet && parentHeight + 1 >= eip37ActivationHeight) {
+    val zyrexEpoch = difficultyCalculator.zyrexEpochAt(parentHeight + 1)
+    if (zyrexEpoch.nonEmpty) {
+      val epochLength = zyrexEpoch.get
+      val heights = difficultyCalculator.zyrexRecalculationHeights(parentHeight)
+      if (heights.nonEmpty) {
+        // Height zero is not a header: the first boundary retains its sole endpoint.
+        val headers = if (historyReader.isInBestChain(parent)) {
+          heights.flatMap(height => historyReader.bestHeaderAtHeight(height))
+        } else {
+          val chain = headerChainBack(heights.max - heights.min + 1, parent, _ => false)
+          chain.headers.filter(p => heights.contains(p.height))
+        }
+        require(headers.map(_.height) == heights, "Activated Zyrex DAA requires every branch endpoint")
+        difficultyCalculator.guardedEip37Calculate(headers, epochLength)
+      } else parent.requiredDifficulty
+    } else if (chainSettings.zyrex.isEmpty && settings.networkType.isMainNet && parentHeight + 1 >= eip37ActivationHeight) {
       val epochLength = 128 // epoch length after EIP-37 activation
       if (parentHeight % epochLength == 0) {
         val heights = difficultyCalculator.previousHeightsRequiredForRecalculation(parentHeight + 1, epochLength)

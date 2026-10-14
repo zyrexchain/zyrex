@@ -45,9 +45,11 @@ func TestForeignNodeNeverReceivesCredential(t *testing.T) {
 }
 
 func TestSignedTransferRequestPreservesEveryNano(t *testing.T) {
-	calls := 0
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	amount := int64(1234567891)
+	generated, broadcast := 0, 0
+	id := strings.Repeat("a", 64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
 		if r.URL.Path == "/info" {
 			if r.Header.Get("api_key") != "" {
 				t.Error("public identity request contained credential")
@@ -55,12 +57,35 @@ func TestSignedTransferRequestPreservesEveryNano(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"network": "testnet", "genesisBlockId": testnetGenesis})
 			return
 		}
-		if r.URL.Path != "/wallet/transaction/send" || r.Method != "POST" {
-			t.Error("incorrect signing endpoint")
+		if r.URL.Path == "/script/addressToTree/ZRX-test-fixture" {
+			w.Write([]byte(`{"tree":"1000"}`))
+			return
 		}
 		if r.Header.Get("api_key") != "private-test-fixture" {
 			t.Error("missing authenticated wallet request")
 		}
+		if r.URL.Path == "/transactions/feeQuote" {
+			w.WriteHeader(404)
+			return
+		}
+		if r.URL.Path == "/transactions/check" || r.URL.Path == "/transactions" {
+			var tx map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+				t.Fatal(err)
+			}
+			if tx["id"] != id {
+				t.Error("signed transaction identity changed")
+			}
+			if r.URL.Path == "/transactions" {
+				broadcast++
+			}
+			json.NewEncoder(w).Encode(id)
+			return
+		}
+		if r.URL.Path != "/wallet/transaction/generate" || r.Method != "POST" {
+			t.Error("incorrect signing endpoint")
+		}
+		generated++
 		var body struct {
 			Requests []struct {
 				Address string
@@ -74,12 +99,12 @@ func TestSignedTransferRequestPreservesEveryNano(t *testing.T) {
 		if len(body.Requests) != 1 || body.Requests[0].Value != 1234567891 || body.Fee != 1000000 {
 			t.Error("integer amounts altered")
 		}
-		w.Write([]byte(`"signed-transaction-id"`))
+		json.NewEncoder(w).Encode(signedFixture(id, amount, body.Fee))
 	}))
 	defer server.Close()
 	t.Setenv("ZYREX_API_KEY", "private-test-fixture")
 	result, err := run([]string{"--node", server.URL, "send", "ZRX-test-fixture", "1.234567891", "--fee", "0.001"})
-	if err != nil || string(result) != `"signed-transaction-id"` || calls != 2 {
+	if err != nil || strings.TrimSpace(string(result)) != `"`+id+`"` || generated != 1 || broadcast != 1 {
 		t.Fatalf("transfer failed: %s %v", result, err)
 	}
 }

@@ -19,7 +19,7 @@ def main():
     tests = ROOT / 'desktop/target/desktop-tests.jar'
     if args.image is None:
         jars = [ROOT / 'desktop/target/input/desktop.jar', ROOT / 'desktop/target/input/zyrex.jar', tests]
-        for suite in ('BackendTests', 'SendLayoutTests'):
+        for suite in ('BackendTests', 'AutoFeeTests', 'DesktopRecoveryIdentityTests', 'SendLayoutTests'):
             subprocess.run(['java', '-Djava.awt.headless=true', '-cp', os.pathsep.join(map(str, jars)),
                             'org.zyrexchain.desktop.' + suite], check=True, timeout=300)
         return

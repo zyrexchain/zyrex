@@ -60,6 +60,7 @@ public final class SendLayoutTests {
             check(inViewport(panel, "send-title"), "The full send title must be visible at the top");
             text(panel, "send-recipient", ADDRESS);
             text(panel, "send-amount", "1.000000001");
+            text(panel, "send-fee", "0.001");
             ((JButton) find(panel, "send-review")).doClick(0);
             layout(panel);
             return null;

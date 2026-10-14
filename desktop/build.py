@@ -45,6 +45,9 @@ def main():
                     '-C', str(ROOT / 'desktop/src/main/resources'), '.'], check=True)
     shutil.copy2(node, input_dir / 'zyrex.jar')
     shutil.copy2(ROOT / 'LICENSE', input_dir / 'LICENSE')
+    licenses = input_dir / 'licenses'
+    licenses.mkdir(exist_ok=True)
+    shutil.copy2(ROOT / 'docs/DEPENDENCY-NOTICES.txt', licenses / 'NATIVE-DATABASE-NOTICES.txt')
     if args.tests:
         tests = sorted((ROOT / 'desktop/src/test/java').rglob('*.java'))
         test_classes = target / 'test-classes'

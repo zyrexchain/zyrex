@@ -182,6 +182,8 @@ public final class FundedGuiSmoke {
             report.put("senderHistoryConfirmed", true);
             report.put("nativeValidationEvidence", senderObservation.mempool ? "mempool script cost and canonical block"
                 : "canonical block; transaction included before mempool observation");
+            Map<String, Object> automatic = automaticTransfer(sender, receiver, recipient, amount, confirmWait, transactionId);
+            report.put("automaticFeePayment", automatic);
             writeReport(output, report);
             closeWindow();
             check(!sender.isRunning(), "Desktop shutdown must stop its owned full node");
@@ -191,6 +193,9 @@ public final class FundedGuiSmoke {
             await(() -> label("wallet-state").equals("Locked"), "restarted encrypted native wallet");
             selectHistory();
             await(() -> historyMatches(transactionId, amount, fee, true), "confirmed outgoing history retained after restart");
+            String automaticId = (String) automatic.get("transactionId");
+            long automaticFee = Long.parseLong((String) automatic.get("feeNano"));
+            await(() -> historyMatches(automaticId, amount, automaticFee, true), "confirmed Auto payment history retained after restart");
             Inclusion restarted = awaitInclusion(sender, transactionId, TIMEOUT);
             check(included.height == restarted.height && included.blockId.equals(restarted.blockId),
                 "Restarted sender must retain the same canonical native inclusion");
@@ -203,7 +208,7 @@ public final class FundedGuiSmoke {
             check(!receiver.isRunning(), "Recipient shutdown must stop only its owned node");
             report.put("recipientOwnedNodeStopped", true);
             writeReport(output, report);
-            System.out.println("Funded GUI signing, exact native payment, canonical confirmation and history restart persistence passed.");
+            System.out.println("Funded GUI manual and Auto payments, exact signed fees, canonical confirmations and history restart passed.");
         } finally {
             Arrays.fill(phrase, '\0');
             Arrays.fill(senderPassword, '\0');
@@ -219,6 +224,48 @@ public final class FundedGuiSmoke {
                 }
             }
         }
+    }
+
+    private static Map<String, Object> automaticTransfer(NodeManager sender, NodeManager receiver, String recipient,
+            long amount, int confirmWait, String previousId) throws Exception {
+        edt(() -> { ((JTabbedPane) named("wallet-tabs")).setSelectedIndex(2); return null; });
+        text("send-recipient", recipient);
+        text("send-amount", Units.format(amount));
+        text("send-fee", "auto");
+        await(() -> enabled("send-review"), "synchronized Auto fee form");
+        click("send-review");
+        await(() -> visibleDialog("Confirm transaction"), "exact Auto fee confirmation before broadcast");
+        String previewId = text("review-transaction-id");
+        check(previewId.matches("[0-9a-f]{64}") && !previewId.equals(previousId), "Auto preview exposes its signed native transaction ID");
+        String shownFee = label("review-network-fee");
+        check(shownFee.startsWith("Network fee: ") && shownFee.endsWith(" ZYRX"), "Auto confirmation displays its exact fee");
+        long fee = Units.parse(shownFee.substring("Network fee: ".length(), shownFee.length() - " ZYRX".length()));
+        check(fee >= Units.DEFAULT_FEE && fee <= Units.AUTO_FEE_LIMIT, "Auto fee stays within its displayed bounds");
+        check(label("review-total").equals("Total: " + Units.format(Math.addExact(amount, fee)) + " ZYRX"), "Auto total includes the fee");
+        String basis = label("review-fee-basis");
+        check(basis.startsWith("Auto · ") && basis.endsWith(" signed bytes"), "Auto preview uses actual native signed bytes");
+        String suffix = basis.substring(basis.lastIndexOf(" · ") + 3, basis.length() - " signed bytes".length());
+        int bytes = Integer.parseInt(suffix);
+        check(bytes > 0 && bytes <= 98_304, "Native signed transaction size is bounded");
+        check(!sender.api().observedTransaction(previewId), "The reviewed transaction has not been broadcast before confirmation");
+        confirmSend();
+        await(() -> previewId.equals(text("sent-transaction")), "broadcast uses the previewed native transaction ID");
+        Observation observation = awaitObservation(sender, previewId);
+        Map<String, Object> script = Json.asObject(read(receiver, "/script/addressToTree/" + recipient));
+        verifySignedPayment(observation.transaction, (String) script.get("tree"), amount, fee);
+        selectHistory();
+        await(() -> historyMatches(previewId, amount, fee, false), "Auto payment has its exact displayed fee in outgoing history");
+        long deadline = System.nanoTime() + Duration.ofSeconds(confirmWait).toNanos();
+        Inclusion sent = awaitInclusion(sender, previewId, Duration.ofSeconds(confirmWait));
+        Inclusion received = awaitInclusion(receiver, previewId, Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));
+        check(sent.height == received.height && sent.blockId.equals(received.blockId), "Both nodes agree on the Auto payment inclusion");
+        verifySignedPayment(sent.transaction, (String) script.get("tree"), amount, fee);
+        check(exactOwnedOutput(received.walletTransaction, recipient, amount), "Recipient owns the exact Auto payment output");
+        check(Json.asLong(receiver.api().balance().get("balance")) == Math.multiplyExact(amount, 2), "Recipient receives both exact payments");
+        await(() -> historyMatches(previewId, amount, fee, true), "Auto payment confirmation is shown in history");
+        return Json.object("transactionId", previewId, "feeNano", Long.toString(fee), "signedBytes", bytes,
+            "feeBasis", basis, "previewBeforeBroadcast", true, "previewedIdBroadcastUnchanged", true,
+            "blockConfirmed", true, "inclusionHeight", sent.height, "canonicalBlockId", sent.blockId);
     }
 
     private static void open(NodeManager manager) throws Exception {

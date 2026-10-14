@@ -1,8 +1,9 @@
 Zyrex Desktop combines a graphical wallet and a full node in one application.
 
-This update fixes outgoing transaction history and distinguishes pending submissions from included payments.
-The Send form scrolls on smaller displays, and the window fits the available desktop area.
-The supplied Zyrex coin logo is used in the wallet header, window and native application icons.
+Automatic fees now use the signed transaction size and recent node observations.
+The confirmation shows the exact fee and total before submitting; manual fee overrides remain available.
+Auto fees above 0.01 ZYRX stop for review. Uncertain submissions keep their signed transaction in private local storage.
+The Send form offers a history check and explicit retry of that same transaction, with its original fee and ID.
 
 - Ubuntu 24.04 or newer: Debian installer and portable Linux x86_64 archive.
 - Windows 10 version 1903 or newer / Windows 11 x64: per-user EXE installer and portable ZIP.

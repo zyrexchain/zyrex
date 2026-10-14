@@ -7,16 +7,15 @@ import org.ergoplatform.modifiers.mempool.{ErgoTransaction, ErgoTransactionSeria
 import org.ergoplatform.nodeView.mempool.OrderedTxPool.WeightedTxId
 import org.ergoplatform.nodeView.state.{ErgoState, ErgoStateContext, UtxoState}
 import org.ergoplatform.settings.{Constants, ErgoSettings, MonetarySettings, NodeConfigurationSettings}
-import scorex.util.{ModifierId, ScorexLogging, bytesToId}
+import scorex.util.{ModifierId, ScorexLogging}
 import OrderedTxPool.weighted
 import org.ergoplatform.modifiers.history.header.Header
 import org.ergoplatform.nodeView.mempool.ErgoMemPoolUtils._
 import sigma.VersionContext
 import spire.syntax.all.cfor
 
-import scala.annotation.tailrec
 import scala.collection.mutable
-import scala.util.{Failure, Success, Try}
+import scala.util.{Failure, Success}
 
 
 /**
@@ -106,22 +105,31 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
     txs.foldLeft(this) { case (acc, tx) => acc.put(tx) }
   }
 
-  private def updateStatsOnRemoval(tx: ErgoTransaction): MemPoolStatistics = {
+  private def updateStatsOnConfirmation(tx: ErgoTransaction, confirmedAt: Long): MemPoolStatistics = {
+    val now = System.currentTimeMillis()
     val wtx = pool.transactionsRegistry.get(tx.id)
-    wtx.map(wgtx => stats.add(System.currentTimeMillis(), wgtx))
-       .getOrElse(MemPoolStatistics(System.currentTimeMillis(), 0, System.currentTimeMillis()))
+    val fee = extractFee(tx)
+    val measured = wtx.map { weightedTx =>
+      val byteFee = FeeEstimation.boundedLong(BigInt(fee) * 1024 / tx.size)
+      stats.add(now, weightedTx.copy(feePerFactor = byteFee))
+    }.getOrElse(stats)
+    measured.addConfirmed(ConfirmedFeeSample(tx.id, confirmedAt, fee, tx.size), now)
   }
+
+  def withoutConfirmations(ids: Set[ModifierId]): ErgoMemPool =
+    new ErgoMemPool(pool, stats.withoutConfirmations(ids), sortingOption)
 
   /**
     * Remove transaction from the pool along with its double-spends
     */
-  def removeTxAndDoubleSpends(tx: ErgoTransaction): ErgoMemPool = {
+  def removeTxAndDoubleSpends(tx: ErgoTransaction, confirmedAt: Long = System.currentTimeMillis()): ErgoMemPool = {
     def removeTx(mp: ErgoMemPool, tx: ErgoTransaction): ErgoMemPool = {
       log.debug(s"Removing transaction ${tx.id} from the mempool")
-      new ErgoMemPool(mp.pool.remove(tx), mp.updateStatsOnRemoval(tx), sortingOption)
+      new ErgoMemPool(mp.pool.remove(tx), mp.stats, sortingOption)
     }
 
-    val poolWithoutTx = removeTx(this, tx)
+    val confirmed = new ErgoMemPool(pool, updateStatsOnConfirmation(tx, confirmedAt), sortingOption)
+    val poolWithoutTx = removeTx(confirmed, tx)
     val doubleSpentTransactionIds = tx.inputs.flatMap(i =>
       poolWithoutTx.pool.inputs.get(i.boxId)
     ).toSet
@@ -136,13 +144,10 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
   /**
     * Remove provided transactions and their doublespends from the pool
     */
-  def removeWithDoubleSpends(txs: TraversableOnce[ErgoTransaction]): ErgoMemPool = {
+  def removeWithDoubleSpends(txs: TraversableOnce[ErgoTransaction],
+                            confirmedAt: Long = System.currentTimeMillis()): ErgoMemPool = {
     txs.foldLeft(this) { case (memPool, tx) =>
-      if (memPool.contains(tx.id)) { // tx could be removed earlier in this loop as double-spend of another tx
-        memPool.removeTxAndDoubleSpends(tx)
-      } else {
-        memPool
-      }
+      memPool.removeTxAndDoubleSpends(tx, confirmedAt)
     }
   }
 
@@ -153,7 +158,7 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
     */
   def invalidate(unconfirmedTx: UnconfirmedTransaction): ErgoMemPool = {
     log.debug(s"Invalidating mempool transaction ${unconfirmedTx.id}")
-    new ErgoMemPool(pool.invalidate(unconfirmedTx), updateStatsOnRemoval(unconfirmedTx.transaction), sortingOption)
+    new ErgoMemPool(pool.invalidate(unconfirmedTx), stats, sortingOption)
   }
 
   def invalidate(unconfirmedTransactionId: ModifierId): ErgoMemPool = {
@@ -363,10 +368,9 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
   def weightedTransactionIds(limit: Int): Seq[WeightedTxId] = pool.orderedTransactions.keysIterator.take(limit).toSeq
 
   private def extractFee(tx: ErgoTransaction): Long = {
-    tx.outputs
+    FeeEstimation.boundedLong(tx.outputs
       .filter(_.ergoTree == settings.chainSettings.monetary.feeProposition)
-      .map(_.value)
-      .sum
+      .foldLeft(BigInt(0))((sum, output) => sum + output.value))
   }
 
   /**
@@ -377,16 +381,15 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
     * @return recommended fee value for transaction to be proceeded in specified time
     */
   def getRecommendedFee(expectedWaitTimeMinutes: Int, txSize: Int): Long = {
-    @tailrec def loop(waitMinutes: Int): Option[Long] =
-      Try(stats.histogram(waitMinutes)).toOption match {
-        case Some(bin) if bin.nTxns != 0 => Some(bin.totalFee / bin.nTxns * txSize / 1024)
-        case _ if waitMinutes < expectedWaitTimeMinutes => loop(waitMinutes + 1)
-        case _ => None
-      }
-
-    val recommendedFee = loop(waitMinutes = 0).getOrElse(settings.nodeSettings.minimalFeeAmount)
-    math.max(recommendedFee, settings.nodeSettings.minimalFeeAmount)
+    // Keep the legacy numeric response, including its historical zero-minute input.
+    getFeeQuote(math.max(1, expectedWaitTimeMinutes), txSize, settings.launchParameters.maxBlockSize).feeNano
   }
+
+  override def getFeeQuote(expectedWaitTimeMinutes: Int, txSize: Int, maxBlockSize: Int): FeeQuote =
+    FeeEstimation.quote(stats.confirmedFees,
+      pool.orderedTransactions.valuesIterator.map { utx => extractFee(utx.transaction) -> utx.transaction.size }.toVector,
+      System.currentTimeMillis(), nodeSettings.minimalFeeAmount, txSize, expectedWaitTimeMinutes,
+      settings.chainSettings.blockInterval.toMillis, maxBlockSize, nodeSettings.maxTransactionSize)
 
   /**
     * Calculate position in mempool corresponding to the specified fee and
@@ -398,22 +401,13 @@ class ErgoMemPool private[mempool](private[mempool] val pool: OrderedTxPool,
     * @return average time for this transaction to be placed in block
     */
   def getExpectedWaitTime(txFee : Long, txSize : Int): Long  = {
-    // Create dummy transaction entry
-    val feePerKb = txFee * 1024 / txSize
-    val dummyModifierId = bytesToId(Array.fill(32)(0.toByte))
-    val wtx = WeightedTxId(dummyModifierId, feePerKb, feePerKb, 0)
-
-    // Find position of entry in mempool
-    val posInPool = pool.orderedTransactions.keySet.until(wtx).size
-
-    // Time since statistics measurement interval (needed to calculate average tx rate)
-    val elapsed = System.currentTimeMillis() - stats.startMeasurement
-    val cappedElapsed = math.max(0L, math.min(elapsed, MemPoolStatistics.measurementIntervalMsec.toLong))
-    if (stats.takenTxns > 0) {
-      cappedElapsed * posInPool / stats.takenTxns
-    } else {
-      0
+    require(txFee >= 0 && txSize > 0, "Invalid fee or transaction size")
+    val bytesAhead = pool.orderedTransactions.valuesIterator.foldLeft(BigInt(0)) { (total, utx) =>
+      val tx = utx.transaction
+      if (BigInt(extractFee(tx)) * txSize >= BigInt(txFee) * tx.size) total + tx.size else total
     }
+    FeeEstimation.boundedLong(FeeEstimation.ceilDivide(
+      bytesAhead * settings.chainSettings.blockInterval.toMillis, BigInt(settings.launchParameters.maxBlockSize)))
   }
 
   /**

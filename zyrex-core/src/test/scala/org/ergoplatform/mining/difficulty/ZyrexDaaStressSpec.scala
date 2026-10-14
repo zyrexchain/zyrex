@@ -183,7 +183,8 @@ class ZyrexDaaStressSpec extends ErgoCorePropertyTest {
                 eip37 = true, positiveFloor = true)
               guarded should be > BigInt(0)
               guarded should be >= normalized(difficulty / 2).max(BigInt(1))
-              guarded should be <= normalized(difficulty * 3 / 2).max(BigInt(1))
+              val upper = if (difficulty == 1) BigInt(2) else normalized(difficulty * 3 / 2)
+              guarded should be <= upper.max(BigInt(1))
               normalized(guarded) shouldBe guarded
             }
         }
@@ -194,4 +195,75 @@ class ZyrexDaaStressSpec extends ErgoCorePropertyTest {
         eip37 = true, positiveFloor = true)).isFailure shouldBe true
     }
   }
+  property("activated guarded calculator rejects missing, zero and non-increasing endpoint data") {
+    profiles.foreach { profile =>
+      val control = profile.calculator
+      val first = baseHeader.copy(height = profile.epochLength, timestamp = 1000L,
+        nBits = DifficultySerializer.encodeCompactBits(BigInt(1)))
+      val last = first.copy(height = first.height + profile.epochLength, timestamp = 2000L)
+      control.guardedEip37Calculate(Seq(first), profile.epochLength) shouldBe BigInt(1)
+      Seq(Seq.empty, Seq(first.copy(nBits = 0)), Seq(first, last.copy(timestamp = 1000L)),
+        Seq(first, last.copy(height = last.height + 1)), Seq(first, last.copy(nBits =
+          DifficultySerializer.encodeCompactBits(BigInt(-1))))).foreach { headers =>
+        Try(control.guardedEip37Calculate(headers, profile.epochLength)).isFailure shouldBe true
+      }
+      Seq(10L, 100L).foreach { departure =>
+        val slow = last.copy(timestamp = first.timestamp + profile.intervalMillis * profile.epochLength * departure)
+        control.guardedEip37Calculate(Seq(first, slow), profile.epochLength) shouldBe BigInt(1)
+      }
+    }
+  }
+
+  property("disabled shorter-period proposals preserve the old warmup and reduce the first slow epoch in blocks") {
+    profiles.filter(_.epochLength > 16).foreach { profile =>
+      Seq(4, 16).foreach { length =>
+        scenarios.foreach { scenario =>
+          val result = simulateShorterEpoch(profile, scenario, length)
+          result.epochs.size shouldBe StressEpochs
+          result.epochs.head.endHeight shouldBe WarmupEpochs * profile.epochLength + length
+          result.epochs.head.difficulty shouldBe ReferenceDifficulty
+          result.epochs.foreach(_.nextDifficulty should be > BigInt(0))
+          scenario.name match {
+            case "constant" => result.epochs.foreach(_.difficulty shouldBe ReferenceDifficulty)
+            case "departure_90_percent" =>
+              result.epochs.head.elapsedMillis shouldBe length.toLong * profile.intervalMillis * 10
+            case "departure_99_percent" =>
+              result.epochs.head.elapsedMillis shouldBe length.toLong * profile.intervalMillis * 100
+            case _ => ()
+          }
+        }
+        val initial = simulateShorterEpoch(profile, scenarios.find(_.name == "departure_99_percent").get,
+          length, BigInt(1))
+        initial.epochs.foreach(_.nextDifficulty shouldBe BigInt(1))
+        initial.recoveryEpoch shouldBe None
+      }
+    }
+  }
+
+  property("guarded difficulty one can grow under increased power while raw EIP-37 remains trapped") {
+    profiles.foreach { profile =>
+      val length = profile.epochLength
+      val control = profile.calculator
+      val first = baseHeader.copy(height = length, timestamp = 0L,
+        nBits = DifficultySerializer.encodeCompactBits(BigInt(1)))
+      val fast = first.copy(height = length * 2, timestamp = profile.intervalMillis * length / 4)
+      control.bitcoinCalculate(Seq(first, fast), length) shouldBe BigInt(4)
+      control.eip37Calculate(Seq(first, fast), length) shouldBe BigInt(1)
+      control.guardedEip37Calculate(Seq(first, fast), length) shouldBe BigInt(2)
+      val steady = fast.copy(timestamp = profile.intervalMillis * length)
+      control.guardedEip37Calculate(Seq(first, steady), length) shouldBe BigInt(1)
+      val slow = fast.copy(timestamp = profile.intervalMillis * length * 4)
+      control.guardedEip37Calculate(Seq(first, slow), length) shouldBe BigInt(1)
+      val scenario = scenarios.find(_.name == "hashrate_x4").get
+      val result = simulate(profile, scenario, BigInt(1), eip37 = true, positiveFloor = true)
+      result.epochs.head.nextDifficulty shouldBe BigInt(2)
+      result.epochs.exists(_.difficulty >= 4) shouldBe true
+      if (profile.epochLength > 16) {
+        val shorter = simulateShorterEpoch(profile, scenario, 16, BigInt(1))
+        shorter.epochs.head.nextDifficulty shouldBe BigInt(2)
+        shorter.epochs.exists(_.difficulty >= 4) shouldBe true
+      }
+    }
+  }
+
 }

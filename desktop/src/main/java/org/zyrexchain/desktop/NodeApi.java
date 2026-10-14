@@ -192,6 +192,140 @@ public final class NodeApi {
         return (String) result;
     }
 
+    /** A zero requested fee selects Auto; positive fees are exact manual values. */
+    PreparedTransfer prepareTransfer(String address, long amount, long requestedFee) throws IOException, InterruptedException {
+        validateAddress(address);
+        boolean automatic = requestedFee == 0;
+        long fee = automatic ? Units.DEFAULT_FEE : requestedFee;
+        for (int attempt = 0; attempt < 4; attempt++) {
+            if (amount <= 0 || fee < Units.DEFAULT_FEE || amount > Long.MAX_VALUE - fee) {
+                throw new IllegalArgumentException("Amount plus fee exceeds the supported range, or the fee is below 0.001 ZYRX");
+            }
+            Map<String, Object> transaction = objectResponse(request("/wallet/transaction/generate",
+                Json.object("requests", Collections.singletonList(Json.object("address", address, "value", amount)), "fee", fee), true));
+            String basis = "Manual fee";
+            int size = 0;
+            if (automatic) {
+                Map<String, Object> quote;
+                try {
+                    quote = objectResponse(request("/transactions/feeQuote?waitTime=1", transaction, true));
+                } catch (ApiException unsupported) {
+                    if (unsupported.statusCode != 404 && unsupported.statusCode != 405) throw unsupported;
+                    quote = null;
+                }
+                if (quote == null) {
+                    basis = "Auto · minimum fee (older node has no fee quote)";
+                } else {
+                    long recommended = quoteUnits(quote.get("feeNano"));
+                    long minimum = quoteUnits(quote.get("minimumFeeNano"));
+                    long bytes = quoteUnits(quote.get("txSize"));
+                    long maximum = quoteUnits(quote.get("maxTransactionSize"));
+                    if (quoteUnits(quote.get("quoteVersion")) != 1 || minimum < 0 || recommended < minimum
+                            || bytes < 1 || bytes > maximum || maximum > 1_048_576
+                            || !String.valueOf(transaction.get("id")).equals(quote.get("txId"))
+                            || !WalletHistory.feeTree().equals(quote.get("feeScriptHex"))
+                            || quoteUnits(quote.get("paidFeeNano")) != fee) {
+                        throw new IOException("The node returned an invalid automatic fee quote");
+                    }
+                    size = (int) bytes;
+                    basis = recommended == minimum ? "Auto · minimum fee" : "Auto · recent confirmations and mempool demand";
+                    if (recommended > Units.AUTO_FEE_LIMIT) {
+                        throw new IOException("The automatic fee exceeds 0.01 ZYRX. Wait or enter a manual fee; nothing was submitted");
+                    }
+                    if (recommended > fee) {
+                        fee = recommended;
+                        continue;
+                    }
+                }
+            }
+            List<String> own = Json.asList(transaction.get("outputs")).size() > 2 ? addresses() : Collections.emptyList();
+            PreparedTransfer prepared = new PreparedTransfer(address, amount, fee, transaction, basis, size, own);
+            checkPrepared(prepared);
+            return prepared;
+        }
+        throw new IOException("The automatic fee did not stabilize. Try again or enter a manual fee; nothing was submitted");
+    }
+
+    void checkPrepared(PreparedTransfer prepared) throws IOException, InterruptedException {
+        prepared.requireFresh();
+        Object result = request("/transactions/check", prepared.transaction(), true);
+        if (!prepared.id.equals(result)) throw new IOException("The node's transaction check returned a different transaction ID");
+    }
+
+    boolean observedTransaction(String id) throws IOException, InterruptedException {
+        return observedTransactionBody(id) != null;
+    }
+
+    boolean observedTransaction(PreparedTransfer prepared) throws IOException, InterruptedException {
+        Map<String, Object> observed = observedTransactionBody(prepared.id);
+        if (observed == null) return false;
+        Map<String, Object> signed = prepared.transaction();
+        final Map<String, Object> quote;
+        try {
+            quote = objectResponse(request("/transactions/feeQuote?waitTime=1", signed, true));
+        } catch (ApiException unsupported) {
+            if (unsupported.statusCode != 404 && unsupported.statusCode != 405) throw unsupported;
+            TransactionIdentity.requireSame(signed, observed);
+            return true;
+        }
+        long size = quoteUnits(quote.get("txSize"));
+        long maximum = quoteUnits(quote.get("maxTransactionSize"));
+        if (quoteUnits(quote.get("quoteVersion")) != 1 || !prepared.id.equals(quote.get("txId"))
+                || !WalletHistory.feeTree().equals(quote.get("feeScriptHex"))
+                || quoteUnits(quote.get("paidFeeNano")) != prepared.fee
+                || size < 1 || size > maximum || maximum > 1_048_576) {
+            throw new IOException("The saved transaction does not match its native identity; its file is preserved");
+        }
+        // The fee has already been signed. A new fee recommendation cannot reprice or invalidate recovery.
+        return true;
+    }
+
+    private Map<String, Object> observedTransactionBody(String id) throws IOException, InterruptedException {
+        if (id == null || !id.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("Invalid transaction ID");
+        try {
+            Map<String, Object> included = objectResponse(request("/wallet/transactionById?id=" + id, null, true));
+            if (!id.equals(included.get("id"))) throw new IOException("The node returned a different history transaction ID");
+            return included;
+        } catch (ApiException missing) {
+            if (missing.statusCode != 404) throw missing;
+        }
+        Object pending;
+        try { pending = request("/transactions/unconfirmed/byTransactionId/" + id, null, true); }
+        catch (ApiException missing) {
+            if (missing.statusCode == 404) return null;
+            throw missing;
+        }
+        if (pending == null) return null;
+        Map<String, Object> unconfirmed = objectResponse(pending);
+        if (!id.equals(unconfirmed.get("id"))) throw new IOException("The node returned a different transaction ID");
+        return unconfirmed;
+    }
+
+    String broadcastPrepared(PreparedTransfer prepared) throws IOException, InterruptedException {
+        prepared.requireFresh();
+        Object result;
+        try {
+            result = request("/transactions", prepared.transaction(), true);
+        } catch (IOException failure) {
+            if (failure instanceof ApiException && ((ApiException) failure).statusCode < 500) throw failure;
+            throw new IOException("Submission result unknown for " + prepared.id
+                + ". Check history before retrying; its signed transaction was not changed", failure);
+        }
+        if (!prepared.id.equals(result)) {
+            throw new IOException("The node did not acknowledge transaction " + prepared.id + ". Check history before retrying");
+        }
+        return prepared.id;
+    }
+
+    private static long quoteUnits(Object value) throws IOException {
+        try {
+            if (value instanceof String && ((String) value).matches("[0-9]{1,19}")) return Long.parseLong((String) value);
+            return Json.asLong(value);
+        } catch (IllegalArgumentException | ArithmeticException failure) {
+            throw new IOException("The node returned an invalid integer in its automatic fee quote", failure);
+        }
+    }
+
     public static void validateAddress(String address) {
         if (address == null || address.length() > 4096 || !address.matches("ZRX[1-9A-HJ-NP-Za-km-z]+")) {
             throw new IllegalArgumentException("Enter a Zyrex testnet address beginning with ZRX");

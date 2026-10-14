@@ -7,6 +7,7 @@ import java.math.BigInteger;
 public final class Units {
     public static final long NANO_PER_COIN = 1_000_000_000L;
     public static final long DEFAULT_FEE = 1_000_000L;
+    public static final long AUTO_FEE_LIMIT = 10_000_000L;
 
     private Units() { }
 

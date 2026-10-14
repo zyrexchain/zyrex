@@ -1,6 +1,5 @@
 package org.ergoplatform.settings
 
-import org.ergoplatform.ErgoAddressEncoder
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -16,7 +15,7 @@ class NetworkTypeSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "use mainnet address prefix" in {
-    NetworkType.MainNet.addressPrefix shouldBe ErgoAddressEncoder.MainnetNetworkPrefix
+    NetworkType.MainNet.addressPrefix shouldBe 48.toByte
   }
 
   "NetworkType.TestNet" should "have correct verboseName" in {
@@ -29,7 +28,7 @@ class NetworkTypeSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "use testnet address prefix" in {
-    NetworkType.TestNet.addressPrefix shouldBe ErgoAddressEncoder.TestnetNetworkPrefix
+    NetworkType.TestNet.addressPrefix shouldBe 64.toByte
   }
 
   "NetworkType.Tests" should "have correct verboseName" in {
@@ -42,7 +41,7 @@ class NetworkTypeSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "use testnet address prefix" in {
-    NetworkType.Tests.addressPrefix shouldBe ErgoAddressEncoder.TestnetNetworkPrefix
+    NetworkType.Tests.addressPrefix shouldBe 64.toByte
   }
 
   "NetworkType.DevNet" should "have correct verboseName" in {
@@ -55,7 +54,7 @@ class NetworkTypeSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "use devnet address prefix" in {
-    NetworkType.DevNet.addressPrefix shouldBe 32
+    NetworkType.DevNet.addressPrefix shouldBe 80.toByte
   }
 
   "NetworkType.DevNet60" should "have correct verboseName" in {
@@ -68,7 +67,7 @@ class NetworkTypeSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "use devnet address prefix" in {
-    NetworkType.DevNet60.addressPrefix shouldBe 32
+    NetworkType.DevNet60.addressPrefix shouldBe 80.toByte
   }
 
   "NetworkType.all" should "include main network types" in {

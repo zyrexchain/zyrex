@@ -2590,6 +2590,70 @@ components:
       items:
         $ref: '#/components/schemas/FeeHistogramBin'
 
+    FeeQuote:
+      description: >-
+        Advisory byte-based fee quote from the configured admission floor, current queue
+        and up to 512 actual active-chain inclusions in the last 30 minutes.
+        It does not guarantee a confirmation deadline; execution-cost sorting can differ.
+        Integer monetary values use decimal strings to preserve exact transport.
+      type: object
+      required:
+        - quoteVersion
+        - feeNano
+        - minimumFeeNano
+        - txSize
+        - waitTime
+        - basis
+        - sampleCount
+        - mempoolBytes
+        - historyWindowSeconds
+        - maxTransactionSize
+        - feeScriptHex
+      properties:
+        quoteVersion:
+          type: integer
+          enum: [1]
+        feeNano:
+          type: string
+          pattern: '^[0-9]+$'
+        minimumFeeNano:
+          type: string
+          pattern: '^[0-9]+$'
+        txSize:
+          type: integer
+          minimum: 1
+        waitTime:
+          type: integer
+          minimum: 1
+          maximum: 60
+        basis:
+          type: string
+          enum: [minimum, recent-inclusions, mempool-pressure]
+        sampleCount:
+          type: integer
+          minimum: 0
+          maximum: 512
+        mempoolBytes:
+          type: string
+          pattern: '^[0-9]+$'
+        historyWindowSeconds:
+          type: integer
+          enum: [1800]
+        maxTransactionSize:
+          type: integer
+          minimum: 1
+        txId:
+          description: Native transaction ID derived from the signed POST payload only.
+          $ref: '#/components/schemas/ModifierId'
+        paidFeeNano:
+          description: Exact sum of signed outputs matching the configured fee proposition; POST only.
+          type: string
+          pattern: '^[0-9]+$'
+        feeScriptHex:
+          description: Configured fee proposition serialized as hexadecimal bytes.
+          type: string
+          pattern: '^[0-9a-f]+$'
+
     Asset:
       description: Token detail in the transaction
       type: object
@@ -3809,16 +3873,17 @@ paths:
     parameters:
       - in: query
         name: waitTime
-        required: true
+        required: false
         description: Maximum transaction wait time in minutes
         schema:
           type: integer
           format: int32
           minimum: 1
+          maximum: 60
           default: 1
       - in: query
         name: txSize
-        required: true
+        required: false
         description: Transaction size
         schema:
           type: integer
@@ -3826,19 +3891,90 @@ paths:
           minimum: 1
           default: 100
     get:
-      summary: Get recommended fee (in nanoErgs) for a transaction with specified size (in bytes) to be proceeded in specified time (in minutes)
+      summary: Get an advisory fee in nanoZYRX for a transaction size and target wait time
       operationId: getRecommendedFee
       tags:
         - transactions
       responses:
         '200':
-          description: Recommended fee for the transaction (in nanoErgs)
+          description: Recommended fee for the transaction in nanoZYRX; legacy numeric response
           content:
             application/json:
               schema:
                 type: integer
         default:
           description: Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /transactions/feeQuote:
+    get:
+      summary: Quote a fee using a caller-supplied native transaction byte length
+      operationId: getFeeQuote
+      tags: [transactions]
+      parameters:
+        - in: query
+          name: waitTime
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 60
+            default: 1
+        - in: query
+          name: txSize
+          description: Positive native serialized length, bounded by the configured transaction maximum.
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+      responses:
+        '200':
+          description: Advisory quote using the current voted block byte limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeQuote'
+        default:
+          description: Invalid size or wait time
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      summary: Quote a signed transaction using its exact native serialized size
+      description: >-
+        Parses the unwrapped signed transaction without broadcasting or validating its scripts.
+        Ignores a caller-provided size field, returns its native transaction ID and enforces
+        the configured serialized transaction maximum and a 2 MiB JSON request limit.
+      operationId: quoteSignedTransactionFee
+      tags: [transactions]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: query
+          name: waitTime
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 60
+            default: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ZyrexTransaction'
+      responses:
+        '200':
+          description: Exact serialized size quote with a native transaction ID binding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeQuote'
+        default:
+          description: Invalid transaction JSON, bounds or API authentication
           content:
             application/json:
               schema:

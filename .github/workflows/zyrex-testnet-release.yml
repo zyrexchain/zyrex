@@ -23,19 +23,32 @@ jobs:
           python3 -m unittest discover -s pool -p 'test_*.py' -v
           PYTHONPATH=pool python3 -m unittest discover -s explorer -p 'test_*.py' -v
           PYTHONPATH=scripts python3 -m unittest -v test_bootstrap
+          python3 scripts/test-wallet-client.py
+          PYTHONPATH=pool:scripts python3 -m unittest -v test_accounting_backup
+          PYTHONPATH=scripts python3 -m unittest -v test_dependency_audit
       - name: Verify native consensus, serialization, PoW and DAA; build the node
         run: >-
           scripts/sbt
           'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification
           *MessageSerializerSpecification *NetworkControllerSpec
-          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *ZyrexMiningWorkSnapshotSpec *MiningApiRouteSpec'
+          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *ZyrexMiningWorkSnapshotSpec *MiningApiRouteSpec
+          *ZyrexFeeEstimationSpec *ZyrexFeeQuoteApiSpec *ZyrexLegacyFixtureSpec *ZyrexDaaActivationSpec
+          *ZyrexDependencyPolicySpec'
           'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
-          *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
+          *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec *ZyrexCalendarSpec' assembly
       - name: Preserve native DAA comparison evidence
         run: |
           scripts/sbt 'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation .local/audit-daa/results.json'
+          scripts/sbt 'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexCalendarAudit .local/audit-daa/calendar.json'
           mkdir -p artifacts/testnet
           cp .local/audit-daa/results.json artifacts/testnet/daa-verification.json
+          cp .local/audit-daa/calendar.json artifacts/testnet/calendar-verification.json
+      - name: Inventory the resolved runtime libraries and their exact bytes
+        run: |
+          scripts/sbt 'export Runtime/externalDependencyClasspath'
+          python3 scripts/dependency-audit.py --artifact target/scala-2.12/zyrex.jar --output artifacts/testnet/dependencies
+          cp artifacts/testnet/dependencies/sbom.cdx.json artifacts/testnet/sbom.cdx.json
+          cp artifacts/testnet/dependencies/report.json artifacts/testnet/dependency-inventory.json
       - name: Fetch the release verification checkpoint
         run: >-
           python3 scripts/bootstrap-checkpoint.py --source-commit "$GITHUB_SHA"
@@ -72,10 +85,12 @@ jobs:
               'checkpoint':report['reference'],'epochEvidence':report['epochEvidence'],
               'ingressEvidence':report['ingressEvidence'],
               'scope':'Experimental alpha; no mainnet or independent-infrastructure readiness claim',
-              'validationScope':'Selected native suites and isolated pool/explorer/bootstrap regressions',
+              'validationScope':'Selected release suites; full native and private integration gated on the same source',
               'runtime':'Java 11','privateTestnetWorkflowRequired':True}
           (output/'BUILD.json').write_text(json.dumps(manifest,indent=2)+'\n')
           shutil.copyfile('docs/RELEASE.md',output/'RELEASE.md')
+          shutil.copyfile('docs/DEPENDENCY-NOTICES.txt',output/'DEPENDENCY-NOTICES.txt')
+          shutil.copyfile('LICENSE',output/'LICENSE')
           files = sorted(p for p in output.iterdir() if p.is_file() and p.name != 'SHA256SUMS')
           (output/'SHA256SUMS').write_text(''.join(
               hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
@@ -89,6 +104,8 @@ jobs:
             artifacts/testnet/*.json
             artifacts/testnet/*.jar
             artifacts/testnet/RELEASE.md
+            artifacts/testnet/DEPENDENCY-NOTICES.txt
+            artifacts/testnet/LICENSE
             artifacts/testnet/SHA256SUMS
           if-no-files-found: warn
           retention-days: 30

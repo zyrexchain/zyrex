@@ -1,16 +1,52 @@
 #!/usr/bin/env python3
 """Zyrex node wallet client. Amounts supplied by users are ZYRX; API values are nanoZYRX."""
 import argparse
+from contextlib import contextmanager
+import fcntl
 import getpass
 import json
 import os
+from pathlib import Path
+import re
+import stat
 import sys
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from decimal import Decimal, InvalidOperation
 
+MINIMUM_FEE = 1_000_000
+FILE_LIMIT = 2 * 1024 * 1024
+GENESIS = {
+    "devnet": "bb994c82d023bf2cf92f88be6f9f997f280b5fb76c3f8dac875f0458dcc51531",
+    "testnet": "0f6e2d9181f10231dafa9e1aa3eb297218204e2e2c38f3c65ae0ab367629d336",
+}
+# Pinned public testnet uses five delayed blocks; private testnet uses three.
+FEE_SCRIPT = (
+    "1005040004000e351002040a08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192"
+    "a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304"
+)
+FEE_SCRIPTS = {"testnet": FEE_SCRIPT, "devnet": FEE_SCRIPT.replace("0e351002040a08cd", "0e351002040608cd", 1)}
+
+
+class NodeHTTPError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(f"Node returned HTTP {code}")
+        self.code = code
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise NodeHTTPError(code)
+
+
+HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
 
 def units(text):
+    if not isinstance(text, str) or len(text) > 32 or not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,9})?", text):
+        raise ValueError("Amount must be a positive decimal with at most 9 decimal places")
     try:
         value = Decimal(text) * 1_000_000_000
         if not value.is_finite() or value <= 0 or value != value.to_integral_value():
@@ -24,14 +60,332 @@ def units(text):
 
 def request(url, key, path, payload=None):
     body = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(url.rstrip("/") + path, data=body,
-                                 headers={"api_key": key, "Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if key is not None:
+        headers["api_key"] = key
+    req = urllib.request.Request(url.rstrip("/") + path, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=60) as response:
-            text = response.read().decode()
+        with HTTP.open(req, timeout=60) as response:
+            data = response.read(4 * 1024 * 1024 + 1)
+            if len(data) > 4 * 1024 * 1024:
+                raise RuntimeError("Node response exceeds the supported size")
+            text = data.decode()
             return json.loads(text) if text else None
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f"Node returned HTTP {error.code}: {error.read().decode()}") from error
+        raise NodeHTTPError(error.code) from error
+
+
+def exact_integer(value):
+    if type(value) is int and 0 <= value <= 2**63 - 1:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,19}", value) and int(value) <= 2**63 - 1:
+        return int(value)
+    raise ValueError("Node returned an invalid fee quote integer")
+
+
+def signed_quote(args, transaction):
+    try:
+        quote = request(args.node, args.api_key, "/transactions/feeQuote?waitTime=1", transaction)
+    except NodeHTTPError as error:
+        if error.code in (404, 405):
+            return None
+        raise
+    if not isinstance(quote, dict):
+        raise ValueError("Node returned an invalid automatic fee quote")
+    fee = exact_integer(quote.get("feeNano"))
+    minimum = exact_integer(quote.get("minimumFeeNano"))
+    size = exact_integer(quote.get("txSize"))
+    maximum = exact_integer(quote.get("maxTransactionSize"))
+    script = quote.get("feeScriptHex", "")
+    if type(quote.get("quoteVersion")) is not int or quote["quoteVersion"] != 1 or quote.get("txId") != transaction.get("id") or fee < minimum \
+            or size < 1 or size > maximum or maximum > 1_048_576 or not isinstance(script, str) \
+            or not re.fullmatch(r"[0-9a-f]+", script) or not 2 <= len(script) <= 4096 or len(script) % 2:
+        raise ValueError("Node returned an invalid automatic fee quote")
+    return quote
+
+
+def validate_metadata(args, prepared):
+    if not isinstance(prepared, dict) or type(prepared.get("version")) is not int or prepared["version"] != 1 \
+            or prepared.get("network") != args.network or prepared.get("genesis") != GENESIS[args.network]:
+        raise ValueError("Saved transaction does not belong to the selected network")
+    amount = exact_integer(prepared.get("amountNano"))
+    fee = exact_integer(prepared.get("feeNano"))
+    identifier = prepared.get("id")
+    transaction = prepared.get("transaction")
+    address = prepared.get("recipient")
+    if amount <= 0 or fee < MINIMUM_FEE or amount > 2**63 - 1 - fee or not isinstance(identifier, str) \
+            or not re.fullmatch(r"[0-9a-f]{64}", identifier) or not isinstance(transaction, dict) \
+            or transaction.get("id") != identifier or not isinstance(address, str) or not 1 <= len(address) <= 4096:
+        raise ValueError("Saved signed transaction contains invalid metadata")
+    return identifier, transaction, address, amount, fee
+
+
+def validate_prepared(args, prepared):
+    validate_intent(args, prepared)
+    if request(args.node, args.api_key, "/transactions/check", prepared["transaction"]) != prepared["id"]:
+        raise ValueError("Node checked a different signed transaction ID")
+
+
+def validate_intent(args, prepared):
+    identifier, transaction, address, amount, fee = validate_metadata(args, prepared)
+    quote = signed_quote(args, transaction)
+    script = quote["feeScriptHex"] if quote else FEE_SCRIPTS[args.network]
+    recipient = request(args.node, None, "/script/addressToTree/" + urllib.parse.quote(address, safe=""))
+    if not isinstance(recipient, dict) or not isinstance(recipient.get("tree"), str) or not recipient["tree"]:
+        raise ValueError("Node returned an invalid recipient script")
+    paid_fee = 0
+    if not transaction.get("inputs") or not isinstance(transaction.get("outputs"), list):
+        raise ValueError("Saved transaction has invalid inputs or outputs")
+    if len(transaction["outputs"]) < 2:
+        raise ValueError("Saved transaction has no payment and fee outputs")
+    extra = transaction["outputs"][1:]
+    owned = wallet_change_scripts(args, address) if any(out.get("ergoTree") != script for out in extra if isinstance(out, dict)) else set()
+    for index, output in enumerate(transaction["outputs"]):
+        if not isinstance(output, dict):
+            raise ValueError("Saved transaction contains an invalid output")
+        value = exact_integer(output.get("value"))
+        if value <= 0:
+            raise ValueError("Saved transaction has an invalid output amount")
+        assets = output.get("assets", [])
+        if not isinstance(assets, list):
+            raise ValueError("Saved transaction contains invalid output assets")
+        if index == 0:
+            if output.get("ergoTree") != recipient["tree"] or value != amount or assets:
+                raise ValueError("Signed payment output does not match the reviewed recipient and amount")
+        elif output.get("ergoTree") == script:
+            if assets:
+                raise ValueError("Network fee output contains unexpected assets")
+            paid_fee += value
+        elif output.get("ergoTree") not in owned:
+            raise ValueError("Signed transaction contains an additional external payment or unverified change")
+    if paid_fee != fee or (quote and exact_integer(quote.get("paidFeeNano")) != fee):
+        raise ValueError("Saved signed transaction does not match its recipient, amount or fee")
+    return quote
+
+
+def canonical_transaction(transaction):
+    result = {}
+    for section in ("inputs", "dataInputs", "outputs"):
+        items = transaction.get(section)
+        if not isinstance(items, list) or (section != "dataInputs" and not items):
+            raise ValueError("Incomplete signed transaction identity arrays")
+        selected = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("Invalid signed transaction identity entry")
+            fields = ("value", "ergoTree", "assets", "creationHeight", "additionalRegisters") if section == "outputs" else ("boxId",)
+            if section == "inputs":
+                fields += ("spendingProof",)
+            if any(field not in item or item[field] is None for field in fields):
+                raise ValueError("Missing canonical signed transaction field")
+            entry = {field: item[field] for field in fields}
+            if section == "inputs":
+                proof = entry["spendingProof"]
+                if not isinstance(proof, dict) or not isinstance(proof.get("proofBytes"), str) or not isinstance(proof.get("extension"), dict):
+                    raise ValueError("Incomplete signed input proof")
+                entry["spendingProof"] = {field: proof[field] for field in ("proofBytes", "extension")}
+            if section == "outputs" and (type(entry["value"]) is not int or type(entry["creationHeight"]) is not int
+                                         or not isinstance(entry["ergoTree"], str) or not isinstance(entry["assets"], list)
+                                         or not isinstance(entry["additionalRegisters"], dict)):
+                raise ValueError("Invalid signed output identity fields")
+            selected.append(entry)
+        result[section] = selected
+    return result
+
+
+def bind_observed(prepared, observed, native_bound):
+    if not isinstance(observed, dict) or observed.get("id") != prepared["id"]:
+        raise ValueError("Node returned a different observed transaction ID")
+    if not native_bound and canonical_transaction(prepared["transaction"]) != canonical_transaction(observed):
+        raise ValueError("Observed transaction does not match the saved signed payload; recovery is preserved")
+
+
+def wallet_change_scripts(args, recipient):
+    addresses = request(args.node, args.api_key, "/wallet/addresses")
+    if not isinstance(addresses, list) or not 1 <= len(addresses) <= 5000 \
+            or any(not isinstance(address, str) or not 1 <= len(address) <= 4096 for address in addresses):
+        raise ValueError("Wallet ownership addresses exceed supported bounds")
+    candidates = {addresses[0]}
+    if recipient in addresses:
+        candidates.add(recipient)
+    if len(addresses) > 1:
+        status = request(args.node, args.api_key, "/wallet/status")
+        if not isinstance(status, dict):
+            raise ValueError("Node returned invalid wallet change address")
+        if status.get("changeAddress") in addresses:
+            candidates.add(status["changeAddress"])
+    # Native single-payment generation directs residual coin and token outputs to its current change address.
+    scripts = set()
+    for address in candidates:
+        result = request(args.node, None, "/script/addressToTree/" + urllib.parse.quote(address, safe=""))
+        if not isinstance(result, dict) or not isinstance(result.get("tree"), str) or not result["tree"]:
+            raise ValueError("Node returned an invalid owned change script")
+        scripts.add(result["tree"])
+    return scripts
+
+
+def prepare(args):
+    amount = units(args.amount)
+    automatic = args.fee.lower() == "auto"
+    fee = MINIMUM_FEE if automatic else units(args.fee)
+    maximum = units(args.max_fee)
+    if maximum < MINIMUM_FEE:
+        raise ValueError("Maximum automatic fee must be at least 0.001 ZYRX")
+    for _ in range(4):
+        if fee < MINIMUM_FEE or amount > 2**63 - 1 - fee:
+            raise ValueError("Amount plus fee exceeds the supported range, or fee is below 0.001 ZYRX")
+        transaction = request(args.node, args.api_key, "/wallet/transaction/generate",
+                              {"requests": [{"address": args.address, "value": amount}], "fee": fee})
+        if not isinstance(transaction, dict) or not isinstance(transaction.get("id"), str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", transaction["id"]):
+            raise ValueError("Node returned an invalid signed transaction ID")
+        if automatic:
+            quote = signed_quote(args, transaction)
+            recommendation = max(MINIMUM_FEE, exact_integer(quote["feeNano"])) if quote else MINIMUM_FEE
+            if recommendation > maximum:
+                raise ValueError("Automatic fee exceeds its limit; nothing was submitted. Wait or explicitly set --max-fee/--fee")
+            if recommendation > fee:
+                fee = recommendation
+                continue
+        prepared = {"version": 1, "network": args.network, "genesis": GENESIS[args.network], "recipient": args.address,
+                    "amountNano": amount, "feeNano": fee, "id": transaction["id"], "transaction": transaction}
+        validate_prepared(args, prepared)
+        print(f"Network fee: {Decimal(fee) / 1_000_000_000} ZYRX; transaction {prepared['id']}", file=sys.stderr)
+        return prepared
+    raise ValueError("Automatic fee did not stabilize; nothing was submitted. Try again or enter a manual fee")
+
+
+def prepared_path(network):
+    config = Path(os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    root = config / "zyrex-wallet"
+    for directory in (root, root / network):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+            raise ValueError("Transaction recovery directory must be real and owner-only")
+    return root / network / "prepared-transfer.json"
+
+
+def sync_directory(directory):
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def save_prepared(path, prepared):
+    data = json.dumps(prepared, separators=(",", ":")).encode()
+    if len(data) > FILE_LIMIT:
+        raise ValueError("Signed transaction recovery record exceeds its size limit")
+    descriptor, temporary = tempfile.mkstemp(prefix=".prepared-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        os.unlink(temporary)
+
+
+def load_prepared(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid() or info.st_size > FILE_LIMIT:
+            raise ValueError("Saved transaction must be bounded, regular and owner-only")
+        data = source.read(FILE_LIMIT + 1)
+        if len(data) > FILE_LIMIT:
+            raise ValueError("Saved transaction exceeds its size limit")
+        return json.loads(data)
+
+
+@contextmanager
+def transfer_lock(path):
+    lockfile = path.with_name("prepared-transfer.lock")
+    descriptor = os.open(lockfile, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o777 != 0o600 or info.st_uid != os.getuid() \
+                or info.st_size != 0 or info.st_nlink != 1:
+            raise ValueError("Transaction lock must be an empty owner-only regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as busy:
+            raise RuntimeError("Another wallet transfer or retry is running; the saved transaction was not changed") from busy
+        yield
+    finally:
+        os.close(descriptor)  # The persistent lock file is never deleted; process exit also releases the kernel lock.
+
+
+def clear_prepared(path, expected):
+    if load_prepared(path) != expected:
+        raise RuntimeError("The saved signed transaction changed; its recovery record is preserved")
+    path.unlink()
+    sync_directory(path.parent)
+
+
+def broadcast_prepared(args, path, prepared):
+    try:
+        identifier = request(args.node, args.api_key, "/transactions", prepared["transaction"])
+    except (RuntimeError, urllib.error.URLError) as error:
+        raise RuntimeError(f"Submission result may be unknown for {prepared['id']}; signed transaction saved at {path}; "
+                           "check history, then use retry") from error
+    if identifier != prepared["id"]:
+        raise RuntimeError(f"Node did not acknowledge {prepared['id']}; saved signed transaction is preserved")
+    try:
+        clear_prepared(path, prepared)
+    except (ValueError, RuntimeError, OSError) as changed:
+        raise RuntimeError(f"Transaction {identifier} accepted; its recovery record could not be cleared") from changed
+    return identifier
+
+
+def retry_prepared(args, path):
+    with transfer_lock(path):
+        return retry_locked(args, path)
+
+
+def retry_locked(args, path):
+    prepared = load_prepared(path)
+    identifier, _, _, _, _ = validate_metadata(args, prepared)
+    quote = validate_intent(args, prepared)  # Parse and bind the native ID; never reprice or check spent inputs here.
+    if quote is None:
+        canonical_transaction(prepared["transaction"])
+    try:
+        included = request(args.node, args.api_key, "/wallet/transactionById?id=" + identifier)
+    except NodeHTTPError as missing:
+        if missing.code != 404:
+            raise
+        included = None
+    if included is not None:
+        bind_observed(prepared, included, quote is not None)
+    pending = None
+    if included is None:
+        try:
+            pending = request(args.node, args.api_key, "/transactions/unconfirmed/byTransactionId/" + identifier)
+        except NodeHTTPError as missing:
+            if missing.code != 404:
+                raise
+    if pending is not None:
+        bind_observed(prepared, pending, quote is not None)
+    if pending is not None or included is not None:
+        clear_prepared(path, prepared)
+        print("Saved transaction already observed; it was not broadcast again", file=sys.stderr)
+        return identifier
+    validate_prepared(args, prepared)
+    print(f"Retrying the same signed transaction {identifier}; fee unchanged", file=sys.stderr)
+    return broadcast_prepared(args, path, prepared)
+
+
+def send_prepared(args, path):
+    with transfer_lock(path):
+        if path.exists() or path.is_symlink():
+            raise ValueError("A saved transaction exists; check it with retry before preparing another transfer")
+        prepared = prepare(args)
+        save_prepared(path, prepared)
+        return broadcast_prepared(args, path, prepared)
 
 
 def main():
@@ -39,19 +393,29 @@ def main():
     parser.add_argument("--node", default=os.getenv("ZYREX_NODE_URL", "http://127.0.0.1:19555"))
     parser.add_argument("--api-key", default=os.getenv("ZYREX_API_KEY", "hello"),
                         help="Prefer ZYREX_API_KEY environment variable; hello is the private-testnet default")
+    parser.add_argument("--network", choices=GENESIS, default=os.getenv("ZYREX_NETWORK", "devnet"))
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("info", "status", "init", "restore", "unlock", "lock", "addresses", "address", "balance"):
+    for name in ("info", "status", "init", "restore", "unlock", "lock", "addresses", "address", "balance", "retry"):
         commands.add_parser(name)
     send = commands.add_parser("send")
     send.add_argument("address")
     send.add_argument("amount", help="ZYRX (maximum 9 decimal places)")
-    send.add_argument("--fee", default="0.001", help="Transaction fee in ZYRX")
+    send.add_argument("--fee", default="auto", help="Automatic fee or an exact manual fee in ZYRX")
+    send.add_argument("--max-fee", default="0.01", help="Maximum Auto fee in ZYRX; manual fees and saved retries are unchanged")
     args = parser.parse_args()
+    origin = urllib.parse.urlsplit(args.node)
+    if origin.scheme not in ("http", "https") or not origin.hostname or origin.username is not None or origin.password is not None \
+            or origin.query or origin.fragment or origin.path not in ("", "/"):
+        raise ValueError("Node must be an HTTP or HTTPS origin without credentials or a path")
     paths = {"info": "/info", "status": "/wallet/status", "addresses": "/wallet/addresses",
              "address": "/wallet/deriveNextKey", "balance": "/wallet/balances",
              "init": "/wallet/init", "restore": "/wallet/restore", "unlock": "/wallet/unlock",
              "lock": "/wallet/lock", "send": "/wallet/transaction/send"}
     payload = None
+    identity = request(args.node, None, "/info")
+    expected_network = "devnet" if args.network == "devnet" else "testnet"
+    if not isinstance(identity, dict) or identity.get("network") != expected_network or identity.get("genesisBlockId") != GENESIS[args.network]:
+        raise ValueError("Node identity does not match the selected Zyrex network")
     if args.command in ("init", "restore", "unlock"):
         payload = {"pass": getpass.getpass("Wallet password: ")}
         if not payload["pass"]:
@@ -60,15 +424,18 @@ def main():
             payload["mnemonic"] = getpass.getpass("Wallet mnemonic: ")
             payload["usePre1627KeyDerivation"] = False
     elif args.command == "send":
-        payload = {"requests": [{"address": args.address, "value": units(args.amount)}],
-                   "fee": units(args.fee)}
-    result = request(args.node, args.api_key, paths[args.command], payload)
+        path = prepared_path(args.network)
+        result = send_prepared(args, path)
+    elif args.command == "retry":
+        result = retry_prepared(args, prepared_path(args.network))
+    if args.command not in ("send", "retry"):
+        result = identity if args.command == "info" else request(args.node, args.api_key, paths[args.command], payload)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, RuntimeError, urllib.error.URLError) as error:
+    except (ValueError, RuntimeError, urllib.error.URLError, OSError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)

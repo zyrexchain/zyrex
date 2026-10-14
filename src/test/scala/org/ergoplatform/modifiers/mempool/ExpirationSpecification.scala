@@ -38,34 +38,26 @@ class ExpirationSpecification extends ErgoCorePropertyTest {
                     heightDelta: Int,
                     outsConstructor: Height => IndexedSeq[ErgoBoxCandidate],
                     expectedValidity: Boolean): Assertion = {
-    // We are filtering out certain heights to avoid problems with improperly generated extension
-    // at the beginning of a voting epoch
-    whenever((from.creationHeight + Constants.StoragePeriod + heightDelta) % votingSettings.votingLength != 0) {
-      val in = Input(from.id,
-        ProverResult(Array.emptyByteArray, ContextExtension(Map(Constants.StorageIndexVarId -> ShortConstant(0)))))
+    val in = Input(from.id,
+      ProverResult(Array.emptyByteArray, ContextExtension(Map(Constants.StorageIndexVarId -> ShortConstant(0)))))
+    val h: Int = from.creationHeight + Constants.StoragePeriod + heightDelta
+    val oc = outsConstructor(h).map(c => updateHeight(c, h))
+    val tx = ErgoTransaction(inputs = IndexedSeq(in), dataInputs = IndexedSeq(), outputCandidates = oc)
 
-      val h: Int = from.creationHeight + Constants.StoragePeriod + heightDelta
+    // Storage rules need the native transaction context, not a randomly invalid block extension.
+    val parent = org.ergoplatform.utils.generators.ErgoCoreGenerators.defaultHeaderGen.sample.get
+      .copy(height = h - 1, timestamp = defaultTimestamp, version = parameters.blockVersion,
+        votes = Array.fill(3)(0.toByte))
+    val inContext = new ErgoStateContext(Seq(parent), None, genesisStateDigest, parameters, validationSettingsNoIl,
+      VotingData.empty)(settings.chainSettings)
+    val updContext = inContext.upcoming(defaultMinerPkPoint, parent.timestamp + 1, parent.nBits,
+      Array.fill(3)(0.toByte), emptyVSUpdate, parent.version)
+    updContext.currentHeight shouldBe h
 
-      val oc = outsConstructor(h).map(c => updateHeight(c, h))
-      val tx = ErgoTransaction(inputs = IndexedSeq(in), dataInputs = IndexedSeq(), outputCandidates = oc)
-
-      val fb0 = invalidErgoFullBlockGen.sample.get
-      val fakeHeader = fb0.header.copy(height = h - 1)
-      val fb = fb0.copy(fb0.header.copy(height = h, parentId = fakeHeader.id))
-
-      val updContext = {
-        val inContext = new ErgoStateContext(Seq(fakeHeader), None, genesisStateDigest, parameters, validationSettingsNoIl,
-          VotingData.empty)(settings.chainSettings)
-        inContext.appendFullBlock(fb).get
-      }
-
-      //serialization roundtrip
-      val bs = ErgoTransactionSerializer.toBytes(tx)
-      ErgoTransactionSerializer.parseBytes(bs) shouldBe tx
-
-      tx.statelessValidity().isSuccess shouldBe true
-      tx.statefulValidity(IndexedSeq(from), emptyDataBoxes, updContext).isSuccess shouldBe expectedValidity
-    }
+    val bs = ErgoTransactionSerializer.toBytes(tx)
+    ErgoTransactionSerializer.parseBytes(bs) shouldBe tx
+    tx.statelessValidity().isSuccess shouldBe true
+    tx.statefulValidity(IndexedSeq(from), emptyDataBoxes, updContext).isSuccess shouldBe expectedValidity
   }
 
   property("successful spending w. same value") {
@@ -123,6 +115,17 @@ class ExpirationSpecification extends ErgoCorePropertyTest {
         IndexedSeq(changeValue(from, -fee), Some(feeBoxCandidate)).flatten
       }, expectedValidity = false)
     }
+  }
+
+  property("storage age boundaries remain checked at a native voting epoch boundary") {
+    val source = unspendableErgoBoxGen().sample.get
+    val epoch = settings.chainSettings.voting.votingLength
+    val targetHeight = (Constants.StoragePeriod / epoch + 1) * epoch
+    val from = testBox(source.value, source.ergoTree, targetHeight - Constants.StoragePeriod,
+      source.additionalTokens.toArray.toSeq, source.additionalRegisters)
+    targetHeight % epoch shouldBe 0
+    constructTest(from, 0, _ => IndexedSeq(from), expectedValidity = true)
+    constructTest(from, -1, _ => IndexedSeq(from), expectedValidity = false)
   }
 
   property("script changed spending w. same value") {

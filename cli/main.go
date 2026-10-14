@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.1.0-testnet"
+var version = "0.1.1-testnet"
 
 const testnetGenesis = "0f6e2d9181f10231dafa9e1aa3eb297218204e2e2c38f3c65ae0ab367629d336"
 const devnetGenesis = "bb994c82d023bf2cf92f88be6f9f997f280b5fb76c3f8dac875f0458dcc51531"
@@ -97,6 +97,10 @@ type client struct {
 	http                            *http.Client
 }
 
+type nodeHTTPError int
+
+func (e nodeHTTPError) Error() string { return fmt.Sprintf("node returned HTTP %d", int(e)) }
+
 func newClient(endpoint, key, network string) (*client, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
@@ -148,7 +152,7 @@ func (c *client) request(path string, payload any, authenticated bool) (json.Raw
 		return nil, errors.New("node response exceeds the supported size")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("node returned HTTP %d", response.StatusCode)
+		return nil, nodeHTTPError(response.StatusCode)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		data = []byte("null")
@@ -180,7 +184,7 @@ func (c *client) verify() (json.RawMessage, error) {
 func usage() {
 	fmt.Fprint(os.Stderr, "Zyrex CLI wallet\nUsage: zyrex-cli [options] COMMAND [arguments]\n\n")
 	fmt.Fprintln(os.Stderr, "Commands: info, status, init, restore, unlock, lock, addresses, address, balance")
-	fmt.Fprintln(os.Stderr, "          send ZRX_ADDRESS AMOUNT [--fee FEE]\n          version")
+	fmt.Fprintln(os.Stderr, "          send ZRX_ADDRESS AMOUNT [--fee auto|FEE] [--max-fee FEE]\n          retry\n          version")
 	fmt.Fprintln(os.Stderr, "Options: --node URL, --network testnet|devnet, --api-key-file FILE")
 	fmt.Fprintln(os.Stderr, "         --password-file FILE, --mnemonic-file FILE")
 	fmt.Fprintln(os.Stderr, "Environment: ZYREX_NODE_URL, ZYREX_API_KEY. Amounts are ZYRX.")
@@ -214,7 +218,7 @@ func run(args []string) (json.RawMessage, error) {
 	}
 	paths := map[string]string{"info": "/info", "status": "/wallet/status", "addresses": "/wallet/addresses",
 		"address": "/wallet/deriveNextKey", "balance": "/wallet/balances", "init": "/wallet/init", "restore": "/wallet/restore",
-		"unlock": "/wallet/unlock", "lock": "/wallet/lock", "send": "/wallet/transaction/send"}
+		"unlock": "/wallet/unlock", "lock": "/wallet/lock", "send": "/transactions", "retry": "/transactions"}
 	path, known := paths[command]
 	if !known {
 		return nil, fmt.Errorf("unknown command: %s", command)
@@ -281,7 +285,8 @@ func run(args []string) (json.RawMessage, error) {
 			return nil, errors.New("send requires a Zyrex address and amount")
 		}
 		sendFlags := flag.NewFlagSet("send", flag.ContinueOnError)
-		fee := sendFlags.String("fee", "0.001", "Fee in ZYRX")
+		fee := sendFlags.String("fee", "auto", "Automatic fee or an exact manual fee in ZYRX")
+		maxFee := sendFlags.String("max-fee", "0.01", "Maximum automatic fee in ZYRX; manual fees and saved retries are unchanged")
 		if err = sendFlags.Parse(rest[3:]); err != nil {
 			return nil, err
 		}
@@ -295,11 +300,13 @@ func run(args []string) (json.RawMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		cost, err := units(*fee)
-		if err != nil {
-			return nil, err
+		maximum, err := units(*maxFee)
+		if err != nil || maximum < minimumFeeNano {
+			return nil, errors.New("maximum automatic fee must be at least 0.001 ZYRX")
 		}
-		payload = map[string]any{"requests": []map[string]any{{"address": rest[1], "value": amount}}, "fee": cost}
+		return c.sendPrepared(rest[1], amount, *fee, maximum)
+	} else if command == "retry" {
+		return c.retryPrepared()
 	}
 	return c.request(path, payload, true)
 }

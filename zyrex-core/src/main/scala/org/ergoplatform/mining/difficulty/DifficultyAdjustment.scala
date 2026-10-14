@@ -51,7 +51,44 @@ class DifficultyAdjustment(val chainSettings: ChainSettings) extends ScorexLoggi
     * @return - heights needed to calculate difficulty after `height`
     */
   def heightsForNextRecalculation(height: Height, epochLength: Int): Seq[Height] = {
-    previousHeightsRequiredForRecalculation(nextRecalculationHeight(height, epochLength), epochLength)
+    val activation = chainSettings.zyrex.flatMap(_.daaActivationHeight)
+    val shorter = chainSettings.zyrex.flatMap(_.daaActivationEpochLength)
+    (activation, shorter) match {
+      case (Some(at), Some(length)) if height >= at - 1 =>
+        val next = nextRecalculationHeight(height, length)
+        postActivationHeights(next - 1, at, length)
+      case (Some(at), Some(_)) if nextRecalculationHeight(height, epochLength) >= at => Seq(at - 1)
+      case _ => previousHeightsRequiredForRecalculation(nextRecalculationHeight(height, epochLength), epochLength)
+    }
+  }
+
+  /** Existing callers, including proof construction, share the activated anchor. */
+  def zyrexEpochAt(height: Height): Option[Int] = chainSettings.zyrex.flatMap { settings =>
+    settings.daaActivationHeight.filter(height >= _)
+      .map(_ => settings.daaActivationEpochLength.getOrElse(chainSettings.epochLength))
+  }
+
+  /** A shortened period starts with one old-boundary anchor; prior intervals never enter its arithmetic. */
+  def postActivationHeights(parentHeight: Height, activationHeight: Height, epochLength: Int): Seq[Height] = {
+    val anchor = activationHeight - 1
+    require(epochLength > 1 && anchor > 0 && parentHeight >= anchor,
+      "Activated endpoints must follow the existing positive boundary")
+    if ((parentHeight - anchor) % epochLength != 0) Seq.empty
+    else {
+      val earliest = (parentHeight.toLong - epochLength.toLong * useLastEpochs).max(anchor.toLong).toInt
+      (earliest to parentHeight by epochLength)
+    }
+  }
+
+  def zyrexRecalculationHeights(parentHeight: Height): Seq[Height] = {
+    zyrexEpochAt(parentHeight + 1).toSeq.flatMap { length =>
+      val settings = chainSettings.zyrex.get
+      if (settings.daaActivationEpochLength.nonEmpty) {
+        postActivationHeights(parentHeight, settings.daaActivationHeight.get, length)
+      } else if (parentHeight % length == 0) {
+        previousHeightsRequiredForRecalculation(parentHeight + 1, length).filter(_ > 0)
+      } else Seq.empty
+    }
   }
 
   /** @param previousHeaders  should be last headers of the previous epochs */
@@ -100,6 +137,25 @@ class DifficultyAdjustment(val chainSettings: ChainSettings) extends ScorexLoggi
     DifficultySerializer.decodeCompactBits(
       DifficultySerializer.encodeCompactBits(uncompressedDiff)
     )
+  }
+
+  /** Zyrex opt-in rule: positive compact difficulty, strict existing epoch endpoints. */
+  def guardedEip37Calculate(previousHeaders: Seq[Header], epochLength: Int): Difficulty = {
+    require(epochLength > 1 && previousHeaders.nonEmpty, "Existing epoch endpoints are required")
+    previousHeaders.foreach { header =>
+      require(header.height > 0 && header.requiredDifficulty > 0, "Endpoint difficulty must be positive")
+    }
+    previousHeaders.sliding(2).filter(_.size == 2).foreach { endpoints =>
+      require(endpoints.last.height - endpoints.head.height == epochLength, "Incorrect endpoint height interval")
+      require(endpoints.last.timestamp > endpoints.head.timestamp, "Endpoint timestamps must strictly increase")
+    }
+    val calculated = if (previousHeaders.size == 1) previousHeaders.head.requiredDifficulty
+      else eip37Calculate(previousHeaders, epochLength)
+    // Native floor(1 * 3 / 2) is one: allow the smallest integer increase only when the classic estimate demands it.
+    val bootstrapIncrease = previousHeaders.size >= 2 && previousHeaders.last.requiredDifficulty == 1 &&
+      bitcoinCalculate(previousHeaders, epochLength) > 1
+    val positive = if (bootstrapIncrease) BigInt(2) else calculated.max(BigInt(1))
+    DifficultySerializer.decodeCompactBits(DifficultySerializer.encodeCompactBits(positive)).max(BigInt(1))
   }
 
   @SuppressWarnings(Array("TraversableHead"))

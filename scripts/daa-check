@@ -2,5 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 exec scripts/sbt \
-  'zyrexCore/testOnly *ZyrexDaaStressSpec *DifficultyAdjustmentSpecification' \
-  'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation .local/audit-daa/results.json'
+  'zyrexCore/testOnly *ZyrexDaaStressSpec *DifficultyAdjustmentSpecification *ZyrexCalendarSpec' \
+  'testOnly *ZyrexDaaActivationSpec *ZyrexConsensusSpec' \
+  'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation .local/audit-daa/results.json' \
+  'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexCalendarAudit .local/audit-daa/calendar.json'

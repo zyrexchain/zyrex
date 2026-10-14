@@ -15,7 +15,16 @@ case class MemPoolStatistics(startMeasurement: Long,
                              takenTxns: Long = 0,
                              snapTime: Long,
                              snapTakenTxns: Long = 0,
-                             histogram: List[FeeHistogramBin] = MemPoolStatistics.defaultPoolHistogram) {
+                             histogram: List[FeeHistogramBin] = MemPoolStatistics.defaultPoolHistogram,
+                             confirmedFees: Vector[ConfirmedFeeSample] = Vector.empty) {
+
+  def addConfirmed(sample: ConfirmedFeeSample, now: Long): MemPoolStatistics = {
+    val retained = FeeEstimation.fresh(confirmedFees, now).filterNot(_.id == sample.id)
+    copy(confirmedFees = FeeEstimation.fresh(retained :+ sample, now))
+  }
+
+  def withoutConfirmations(ids: Set[scorex.util.ModifierId]): MemPoolStatistics =
+    copy(confirmedFees = confirmedFees.filterNot(sample => ids.contains(sample.id)))
 
   /**
     * Add new entry to mempool statistics. This method is called when transaction is taken from mempool
@@ -38,13 +47,15 @@ case class MemPoolStatistics(startMeasurement: Long,
       }
     val durationMinutes = ((currTime - wtx.created) / (60 * 1000)).toInt
     val newHist =
-      if (durationMinutes < MemPoolStatistics.nHistogramBins) {
-        val (histx, hisfee) = (histogram(durationMinutes).nTxns + 1, histogram(durationMinutes).totalFee + wtx.feePerFactor)
+      if (durationMinutes >= 0 && durationMinutes < MemPoolStatistics.nHistogramBins) {
+        val histx = math.min(Int.MaxValue.toLong, histogram(durationMinutes).nTxns.toLong + 1).toInt
+        val hisfee = FeeEstimation.boundedLong(BigInt(histogram(durationMinutes).totalFee) + wtx.feePerFactor)
         histogram.updated(durationMinutes, FeeHistogramBin(histx, hisfee))
       } else {
         histogram
       }
-    MemPoolStatistics(newMeasurement, newTakenTx, newSnapTime, newSnapTxs, newHist)
+    copy(startMeasurement = newMeasurement, takenTxns = newTakenTx, snapTime = newSnapTime,
+      snapTakenTxns = newSnapTxs, histogram = newHist)
   }
 }
 

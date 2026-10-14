@@ -2,7 +2,7 @@ package org.ergoplatform.utils
 
 import org.ergoplatform.ErgoBox.BoxId
 import org.ergoplatform.modifiers.mempool.{ErgoTransaction, UnconfirmedTransaction}
-import org.ergoplatform.nodeView.mempool.{ErgoMemPoolReader, OrderedTxPool}
+import org.ergoplatform.nodeView.mempool.{ErgoMemPoolReader, FeeQuote, OrderedTxPool}
 import scorex.util.ModifierId
 
 trait MempoolTestHelpers {
@@ -31,6 +31,9 @@ trait MempoolTestHelpers {
     override def spentInputs: Iterator[BoxId] = txs.map(_.transaction).flatMap(_.inputs).map(_.boxId).toIterator
 
     override def getRecommendedFee(expectedWaitTimeMinutes: Int, txSize: Int) : Long = 0
+
+    override def getFeeQuote(expectedWaitTimeMinutes: Int, txSize: Int, maxBlockSize: Int): FeeQuote =
+      FeeQuote(0L, 0L, txSize, expectedWaitTimeMinutes, "minimum", 0, 0L, Int.MaxValue)
 
     override def getExpectedWaitTime(txFee: Long, txSize: Int): Long = 0
 

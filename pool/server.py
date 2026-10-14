@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 from ledger import Ledger
+from fee_policy import policy as payout_fee_policy
 from job_lifecycle import ClientJobs, PoolJobs, SOLUTION_ACK_SECONDS, StratumError, WorkResults, candidate_work
 from node import Node
 from pow import DIFF1, MAX_TARGET, hit, validate_miner_address
@@ -614,6 +615,8 @@ class Pool(PoolJobs):
                     "confirmations": self.config["confirmations"], "stratumUrl": self.config["publicStratumUrl"],
                     "minimumPayoutNano": self.config["minimumPayoutNano"],
                     "payoutFeeNano": self.config["payoutFeeNano"], "feePaidBy": "miners",
+                    "payoutFeeMode": self.config.get("payoutFeeMode", "fixed"),
+                    "maximumPayoutFeeNanoZYRX": str(payout_fee_policy(self.config)[2]),
                     "payoutFeePolicy": "actual-transaction-v1",
                     "nodeError": self.error, "payoutError": self.payout_error,
                     "poolAddress": self.node.wallet.get("address"), "resources": self.resource_stats()})
@@ -705,6 +708,7 @@ def validate_config(config):
         raise ValueError("Pool confirmations must exceed consensus reward maturity")
     minimum = config["minimumPayoutNano"]
     fee = config.get("payoutFeeNano")
+    payout_fee_policy(config)
     if type(minimum) is not int or not 1_000_000 <= minimum <= (1 << 63) - 1:
         raise ValueError("Minimum payout is below the supported transaction amount")
     if type(fee) is not int or not 0 < fee <= (1 << 63) - 1 or minimum < fee + 1_000_000:

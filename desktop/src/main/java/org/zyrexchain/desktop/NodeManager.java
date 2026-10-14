@@ -550,13 +550,13 @@ public final class NodeManager implements AutoCloseable {
         writePrivate(path, bytes, true);
     }
 
-    private static void writePrivate(Path path, byte[] bytes, boolean limitExistingSize) throws IOException {
+    static void writePrivate(Path path, byte[] bytes, boolean limitExistingSize) throws IOException {
         if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
             requirePrivateFile(path, limitExistingSize);
         }
         Path temporary = path.resolveSibling(path.getFileName() + ".new");
         if (Files.exists(temporary, LinkOption.NOFOLLOW_LINKS)) {
-            requirePrivateFile(temporary);
+            requirePrivateFile(temporary, limitExistingSize);
             Files.delete(temporary);
         }
         createPrivateFile(temporary, bytes);
@@ -571,7 +571,7 @@ public final class NodeManager implements AutoCloseable {
         requirePrivateFile(path, true);
     }
 
-    private static void requirePrivateFile(Path path, boolean limitSize) throws IOException {
+    static void requirePrivateFile(Path path, boolean limitSize) throws IOException {
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path)
                 || (limitSize && Files.size(path) > 16384)) {
             throw new IOException("Desktop settings must be regular private files");

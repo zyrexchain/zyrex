@@ -23,7 +23,7 @@ import sigma.ast.{EvaluatedValue, SType}
 import sigmastate.eval.Extensions.ArrayByteOps
 
 import scala.concurrent.Future
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 case class TransactionsApiRoute(readersHolder: ActorRef,
                                 nodeViewActorRef: ActorRef,
@@ -74,6 +74,7 @@ case class TransactionsApiRoute(readersHolder: ActorRef,
       sendTransactionAsBytesR ~
       getFeeHistogramR ~
       getRecommendedFeeR ~
+      getFeeQuoteR ~
       getExpectedWaitTimeR
   }
 
@@ -229,13 +230,64 @@ case class TransactionsApiRoute(readersHolder: ActorRef,
   val feeRequestParameters: Directive[(Int, Int)] = parameters("waitTime".as[Int] ? 1, "txSize".as[Int] ? 100)
 
   def getRecommendedFeeR: Route = (path("getFee") & get & feeRequestParameters) { (waitTime, txSize) =>
-    ApiResponse(getMemPool.map(_.getRecommendedFee(waitTime,txSize).asJson))
+    if (!validFeeParameters(math.max(1, waitTime), txSize) || waitTime < 0) {
+      BadRequest("Fee parameters are outside the supported bounds")
+    } else {
+      ApiResponse(getStateAndPool.map { case (state, pool) =>
+        pool.getFeeQuote(math.max(1, waitTime), txSize, state.parameters.maxBlockSize).feeNano.asJson
+      })
+    }
+  }
+
+  private def validFeeParameters(waitTime: Int, txSize: Int): Boolean =
+    waitTime >= 1 && waitTime <= org.ergoplatform.nodeView.mempool.FeeEstimation.MaxWaitMinutes &&
+      txSize > 0 && txSize <= ergoSettings.nodeSettings.maxTransactionSize
+
+  /** A signed transaction quote uses native bytes, never a caller-provided JSON size. */
+  def getFeeQuoteR: Route = path("feeQuote") {
+    (get & feeRequestParameters) { (waitTime, txSize) =>
+      if (!validFeeParameters(waitTime, txSize)) {
+        BadRequest("Fee parameters are outside the supported bounds")
+      } else {
+        ApiResponse(getStateAndPool.map { case (state, pool) =>
+          pool.getFeeQuote(waitTime, txSize, state.parameters.maxBlockSize).asJson.deepMerge(
+            Json.obj("feeScriptHex" -> Json.fromString(ergoSettings.chainSettings.monetary.feeProposition.bytesHex)))
+        })
+      }
+    } ~
+      (post & withAuth & parameter("waitTime".as[Int] ? 1) & withSizeLimit(2L * 1024 * 1024) &
+        entity(as[ErgoTransaction])) { (waitTime, tx) =>
+        val feeTree = ergoSettings.chainSettings.monetary.feeProposition
+        val parsed = Try {
+          val size = ErgoTransactionSerializer.toBytes(tx).length
+          val paidFee = tx.outputCandidates.filter(_.ergoTree == feeTree)
+            .foldLeft(BigInt(0))((sum, output) => sum + output.value)
+          (size, paidFee, tx.id)
+        }
+        parsed match {
+          case Failure(_) => BadRequest("Cannot serialize the transaction quote payload")
+          case Success((size, paidFee, _))
+            if !validFeeParameters(waitTime, size) || paidFee < 0 || paidFee > Long.MaxValue =>
+            BadRequest("Fee parameters or paid fee are outside the supported bounds")
+          case Success((size, paidFee, txId)) =>
+            ApiResponse(getStateAndPool.map { case (state, pool) =>
+              pool.getFeeQuote(waitTime, size, state.parameters.maxBlockSize).asJson.deepMerge(
+                Json.obj("txId" -> txId.asJson,
+                  "paidFeeNano" -> Json.fromString(paidFee.toString),
+                  "feeScriptHex" -> Json.fromString(feeTree.bytesHex)))
+            })
+        }
+      }
   }
 
   val waitTimeRequestParameters: Directive[(Long, Int)] = parameters("fee".as[Long] ? 1000L, "txSize".as[Int] ? 100)
 
   def getExpectedWaitTimeR: Route = (path("waitTime") & get & waitTimeRequestParameters) { (fee, txSize) =>
-    ApiResponse(getMemPool.map(_.getExpectedWaitTime(fee,txSize).asJson))
+    if (fee < 0 || txSize <= 0 || txSize > ergoSettings.nodeSettings.maxTransactionSize) {
+      BadRequest("Fee or transaction size is outside the supported bounds")
+    } else {
+      ApiResponse(getMemPool.map(_.getExpectedWaitTime(fee,txSize).asJson))
+    }
   }
 
   /** Unconfirmed Txs */

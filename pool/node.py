@@ -7,6 +7,7 @@ from pow import address_bytes
 from ledger import allocate_integer, positive_nano
 from reconciliation import reconcile_chain, retry_payments, verify_payout_tip
 from header_message import header_message
+from fee_policy import prepare_payment
 
 
 def payout_plan(balances, minimum, fee, limit=50):
@@ -112,17 +113,10 @@ class Node:
         verify_payout_tip(self, ledger)
         if not retry_payments(self, ledger):
             return
-        fee = self.config["payoutFeeNano"]
-        gross, amounts, charges = payout_plan(ledger.payable_balances(self.config["minimumPayoutNano"]),
-                                              self.config["minimumPayoutNano"], fee)
-        if not amounts:
+        payment = prepare_payment(self, ledger.payable_balances(self.config["minimumPayoutNano"]), payout_plan)
+        if payment is None:
             return
-        balance = self.rpc("/wallet/balances")["balance"]
-        if balance < sum(gross.values()):
-            return
-        tx = self.rpc("/wallet/transaction/generate", {
-            "requests": [{"address": a, "value": n} for a, n in amounts.items()], "fee": fee})
-        self.validate_payout(tx, amounts, fee)
+        tx, gross, amounts, charges = payment
         verify_payout_tip(self, ledger)
         ledger.prepare_payout(tx, amounts, gross, charges)
         self.rpc("/transactions", tx)

@@ -6,7 +6,7 @@ import org.ergoplatform.{CriticalSystemException, ErgoApp}
 import org.ergoplatform.consensus.ProgressInfo
 import org.ergoplatform.core._
 import org.ergoplatform.modifiers.history.header.Header
-import org.ergoplatform.modifiers.history.{ADProofs, HistoryModifierSerializer}
+import org.ergoplatform.modifiers.history.{ADProofs, BlockTransactions, HistoryModifierSerializer}
 import org.ergoplatform.modifiers.mempool.{ErgoTransaction, UnconfirmedTransaction}
 import org.ergoplatform.modifiers.transaction.TooHighCostError
 import org.ergoplatform.modifiers.{BlockSection, ErgoFullBlock, NetworkObjectTypeId, TransactionsCarryingBlockSection}
@@ -432,7 +432,17 @@ abstract class ErgoNodeViewHolder[State <: ErgoState[State]](settings: ErgoSetti
       .flatMap(extractTransactions)
       .filter(tx => !appliedTxs.exists(_.id == tx.id))
       .map(tx => UnconfirmedTransaction(tx, None))
-    memPool.removeWithDoubleSpends(appliedTxs).put(rolledBackTxs)
+    val withoutRolledBack = memPool.withoutConfirmations(rolledBackTxs.map(_.id).toSet)
+    val updated = blocksApplied.foldLeft(withoutRolledBack) { (pool, block) =>
+      val timestamp = block match {
+        case full: ErgoFullBlock => full.header.timestamp
+        case transactions: BlockTransactions =>
+          history().typedModifierById[Header](transactions.headerId).map(_.timestamp).getOrElse(0L)
+        case _ => 0L
+      }
+      pool.removeWithDoubleSpends(extractTransactions(block), timestamp)
+    }
+    updated.put(rolledBackTxs)
   }
 
   /**

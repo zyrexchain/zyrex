@@ -29,7 +29,7 @@ object Constants {
   val BlocksPerYear: Int = BlocksPerDay * 365
 
   //For how many blocks a box could be put into the state with no paying.
-  //4 years
+  // Retained 1,051,200-block threshold: 730 nominal days at Zyrex's 60-second target.
   val StoragePeriod: Int = 4 * BlocksPerYear // 1,051,200 blocks
 
   val StorageContractCost: Long = 50

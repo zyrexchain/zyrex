@@ -34,6 +34,17 @@ case class ChainSettings(protocolVersion: Byte,
                          genesisId: Option[ModifierId] = None,
                          zyrex: Option[ZyrexChainSettings] = None) {
 
+  zyrex.flatMap(_.daaActivationHeight).foreach { height =>
+    require(epochLength > 1 && (height - 1) % epochLength == 0,
+      "Zyrex DAA activation must be the first header after a configured epoch boundary")
+    require(eip37EpochLength.forall(_ == epochLength),
+      "Zyrex DAA activation retains the configured epoch length")
+    zyrex.flatMap(_.daaActivationEpochLength).foreach { length =>
+      require(length > 1 && length < epochLength && epochLength % length == 0,
+        "An activated shorter DAA epoch must divide the existing epoch and contain at least two blocks")
+    }
+  }
+
   val isMainnet: Boolean = addressPrefix == ErgoAddressEncoder.MainnetNetworkPrefix || addressPrefix == 48
 
   val genesisStateDigest: ADDigest = Base16.decode(genesisStateDigestHex)

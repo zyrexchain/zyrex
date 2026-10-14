@@ -7,6 +7,20 @@ on:
 permissions:
   contents: read
 jobs:
+  native-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '11'
+      - name: Full inherited node, core, wallet and database regression suites
+        run: scripts/sbt test zyrexCore/test zyrexWallet/test avldb/test
   consensus:
     runs-on: ubuntu-24.04
     timeout-minutes: 55
@@ -24,23 +38,34 @@ jobs:
         run: python3 -m unittest discover -s pool -p 'test_*.py' -v
       - name: Explorer canonical index and rollback tests
         run: PYTHONPATH=pool python3 -m unittest discover -s explorer -p 'test_*.py' -v
-      - name: Consensus, address, network and upstream PoW/DAA tests
+      - name: Signed CLI recovery and consistent accounting backups
+        run: |
+          python3 scripts/test-wallet-client.py
+          PYTHONPATH=pool:scripts python3 -m unittest -v test_accounting_backup
+          PYTHONPATH=scripts python3 -m unittest -v test_dependency_audit
+      - name: Native consensus, fees, guarded activation and public protocol checks
         run: >-
-          scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification
+          scripts/sbt
+          'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification
           *MessageSerializerSpecification *NetworkControllerSpec
-          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *ZyrexMiningWorkSnapshotSpec *MiningApiRouteSpec'
+          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *ZyrexMiningWorkSnapshotSpec *MiningApiRouteSpec
+          *ZyrexFeeEstimationSpec *ZyrexFeeQuoteApiSpec *ZyrexLegacyFixtureSpec *ZyrexDaaActivationSpec
+          *ZyrexDependencyPolicySpec'
           'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
-          *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
+          *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec *ZyrexCalendarSpec' assembly
       - name: Native DAA stress evidence for each source configuration
         run: >-
           scripts/sbt
           'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexDaaSimulation .local/audit-daa/results.json'
+          'zyrexCore/Test/runMain org.ergoplatform.mining.difficulty.ZyrexCalendarAudit .local/audit-daa/calendar.json'
       - name: Preserve native DAA evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-daa-verification
-          path: .local/audit-daa/results.json
+          path: |
+            .local/audit-daa/results.json
+            .local/audit-daa/calendar.json
           if-no-files-found: warn
           retention-days: 30
       - name: Launch three private nodes

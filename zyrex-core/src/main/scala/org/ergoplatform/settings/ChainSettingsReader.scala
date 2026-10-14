@@ -6,12 +6,12 @@ import net.ceedubs.ficus.readers.ArbitraryTypeReader._
 import java.io.File
 
 object ChainSettingsReader extends PowSchemeReaders with ModifierIdReader with SettingsReaders{
-  def read(path: String): Option[ChainSettings] = {
+  def read(path: String, networkFallbackPath: String = "src/main/resources/testnet.conf"): Option[ChainSettings] = {
     val file = new File(path)
     if (file.exists) {
       val cfg = ConfigFactory.parseFile(file)
       val fallback = ConfigFactory.parseFile(new File("src/main/resources/application.conf"))
-      val network = ConfigFactory.parseFile(new File("src/main/resources/testnet.conf"))
+      val network = ConfigFactory.parseFile(new File(networkFallbackPath))
       val fullConfig = ConfigFactory
         .defaultOverrides()
         .withFallback(cfg) //order

@@ -34,7 +34,9 @@ object ErgoCoreTestConstants extends ScorexLogging {
   val walletTestKeysQty: Option[Int] =
     Some(ConfigFactory.parseFile(new File(configPath)).as[Int]("zyrex.wallet.testKeysQty"))
 
-  val chainSettings: ChainSettings = ChainSettingsReader.read(configPath).get
+  // Legacy fixtures must not inherit public-chain monetary or activation defaults.
+  val chainSettings: ChainSettings = ChainSettingsReader
+    .read(configPath, "src/test/resources/upstream/testnet.conf").get
 
   implicit val votingSettings: VotingSettings = VotingSettings(1024, 32, 128, 32 * 1024, "01")
   val validationSettings: ErgoValidationSettings = ErgoValidationSettings.initial

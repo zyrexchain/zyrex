@@ -1,8 +1,9 @@
 # Difficulty adjustment evidence
 
 Zyrex's launched testnet uses the inherited legacy predictive calculator,
-`DifficultyAdjustment.calculate`. The EIP-37 branch is excluded when Zyrex
-chain settings are present. This verification keeps the live rules unchanged.
+`DifficultyAdjustment.calculate`. The upstream EIP-37 branch is excluded when Zyrex
+chain settings are present. The separate Zyrex activation hook is disabled in all
+source profiles. This verification keeps the live rules unchanged.
 Changing them requires an announced consensus activation or a separate testnet
 reset; the mainnet template is not an approved launch configuration.
 
@@ -78,7 +79,9 @@ Run the native stress suite and existing DAA regressions:
 scripts/daa-check
 ```
 
-The JSON contains 67 successful runs and two failed candidate runs, every stress
+The JSON contains 67 successful comparison runs, two failed raw candidate runs,
+36 disabled shorter-period proposals and three explicit difficulty-one growth
+comparisons, every stress
 epoch's duration and difficulty, and
 SHA-256 hashes of the calculator, compact serializer, header processor,
 simulation source and all three network profiles. Keep execution artifacts in
@@ -109,14 +112,17 @@ instead of constructing further headers. Any candidate implementation needs an
 explicit, tested minimum positive difficulty before activation. This evidence
 does not approve a direct substitution of the native EIP-37 method.
 
-A separate test-only candidate applies `max(1)` after the native EIP-37 result has
-been compact-normalized. It keeps the mature simulation traces unchanged and
+The guarded native helper applies `max(1)` to the EIP-37 result and performs a
+compact serialization cycle. It keeps the mature simulation traces unchanged and
 completes the difficulty-one departure scenarios with positive difficulty one.
 Fixed native vectors cover difficulties 1, 2, 3, 2^32 and 2^240, epoch timestamp
 intervals from one millisecond to one million times the target, normalized step
-bounds, and rejection of equal endpoint timestamps. The guard prevents a zero
-result; it cannot accelerate a difficulty-one chain after mining power departs.
-This wrapper has not been activated in consensus.
+bounds, and rejection of equal endpoint timestamps. The positive guard prevents
+a zero result. A separate discrete bootstrap rule permits the smallest upward
+integer step; neither guard can restore target time after a departure when
+difficulty is already one.
+The production guarded helper now has an optional activation hook; it remains
+disabled on every existing network.
 
 ## Launch decision
 
@@ -126,3 +132,76 @@ behavior; they do not justify the current mainnet template. Selection of a final
 DAA and epoch length remains a launch gate. An EIP-37 candidate must be tested
 separately with native validation, timestamp cases and the intended final
 parameters before any activation is authorized.
+
+
+## Disabled activation hook
+
+`zyrex.chain.zyrex.daaActivationHeight = null` preserves the complete legacy path.
+An explicitly configured activation must be greater than one and satisfy
+`(height - 1) % epochLength == 0`: it selects the first header after an existing
+epoch boundary. At and after that height, recalculations use the native guarded
+EIP-37 calculation, retaining the current epoch length and eight-epoch history.
+Headers between recalculations retain their parent's difficulty. The configured
+upstream EIP-37 epoch length must be absent or equal to the existing epoch length.
+
+At the first possible boundary, the nonexistent height-zero endpoint is omitted.
+A single existing endpoint retains its positive compact-normalized difficulty.
+Later boundaries require all selected endpoints from the candidate's own branch,
+positive endpoint difficulties, exact height spacing and strictly increasing
+timestamps. The native result is floored at one and compact-normalized. The
+original upstream calculator and all pre-activation rules remain unchanged.
+
+At difficulty one, the raw EIP-37 upper cap `floor(1 * 3 / 2)` also equals one,
+which prevents any upward adjustment. The guarded rule has one explicit discrete
+exception: with at least two endpoints, if the native classic estimate
+`lastDifficulty * targetInterval * epochLength / elapsedTime` exceeds one, it
+returns compact-normalized difficulty two. Constant or reduced power retains
+one; larger difficulties keep the native EIP-37 caps. This exception applies only
+to the disabled guarded rule. Native headers and fourfold-power model vectors
+test the transition, the rejected old target and subsequent difficulty growth.
+
+Temporary native histories test accepted and rejected PoW headers before, at and
+after activation, different endpoint histories on a fork, the first endpoint,
+zero/negative difficulty and timestamp boundaries. Stress scenarios retain 90%
+and 99% departures and difficulty-one startup. These tests establish rule
+selection and validation, not acceptable recovery under real power loss.
+
+Activation is a consensus choice that all operators must announce and configure
+before the selected height. The field is not committed into the existing genesis
+script, so conflicting configured heights produce a fork when their rules diverge.
+No activation height is selected, deployed or authorized by this implementation;
+a mainnet launch and any live activation still need a separate decision. A
+non-boundary height is rejected rather than silently rounded. Existing public
+64-block and mainnet-template 2,048-block epochs remain unchanged and require
+separate consideration because both algorithms still wait for the next boundary.
+See [the calendar audit](CALENDAR.md) for the independent height schedules.
+
+## Disabled shorter-period proposal
+
+`zyrex.chain.zyrex.daaActivationEpochLength = null` retains the existing period.
+An explicit shorter period additionally requires an announced activation height,
+must contain at least two blocks, be smaller than the existing period and divide
+it exactly. The activation still falls on the first header after an old-period
+boundary. The original `epochLength` remains unchanged before that height.
+
+With a shorter period configured, activation starts a new endpoint history at
+height `activationHeight - 1`. The first activated header retains that parent's
+difficulty; later recalculations use only that anchor and post-activation
+endpoints spaced by the shorter period. Earlier old-period timestamps never
+enter the new-period arithmetic. At most eight intervals are retained. Native
+header validation and continuous proof construction/checking use the same
+endpoint-selection helper, including alternate branches and transition bounds.
+
+Separate proposal simulations warm up for ten original epochs, then model
+32 shorter epochs with periods four and sixteen for the public and mainnet
+templates. They also exercise difficulty-one startup. Native headers test the
+old-period boundary, first anchored result, the next shorter boundary, rejection
+of mixed-history targets and a competing branch. These are disabled options,
+not new network settings. Selection of a height and period remains a consensus
+decision; all operators must configure the identical values in advance.
+
+Shortening the period limits the number of slow blocks before the first
+adjustment. It still waits for the first new boundary: after 99% modeled power
+loss, four blocks take 6 hours 40 minutes and sixteen take 26 hours 40 minutes
+at the old difficulty. A positive floor cannot restore target timing when
+difficulty is already one. No proposal here guarantees real mining recovery.

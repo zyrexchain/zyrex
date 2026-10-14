@@ -51,7 +51,7 @@ class ZyrexConsensusSpec extends ErgoCorePropertyTest {
   }
 
   private def valid(tx: ErgoTransaction, box: ErgoBox, ctx: ErgoStateContext): Boolean =
-    tx.statefulValidity(IndexedSeq(box), IndexedSeq.empty, ctx)(
+    tx.statelessValidity().isSuccess && tx.statefulValidity(IndexedSeq(box), IndexedSeq.empty, ctx)(
       ErgoInterpreter(ctx.currentParameters)).isSuccess
 
   private def scriptValid(tx: ErgoTransaction, box: ErgoBox, ctx: ErgoStateContext): Boolean = {
@@ -103,6 +103,23 @@ class ZyrexConsensusSpec extends ErgoCorePropertyTest {
       }
     }
     rules.emissionAtHeight(LastEmissionHeight + 1) shouldBe 0L
+  }
+
+  property("tiny tail outputs bypass dust only when spending the exact emission script") {
+    val lastFounderEpoch = Rates.lastIndexWhere(_ >= 20L)
+    Seq(lastFounderEpoch * HalvingInterval + 1, LastEmissionHeight).foreach { height =>
+      val (box, tx, ctx) = claim(height)
+      tx.outputs.exists(out => out.value < org.ergoplatform.utils.BoxUtils.minimalErgoAmount(
+        out, ctx.currentParameters)) shouldBe true
+      valid(tx, box, ctx) shouldBe true
+      scriptValid(tx, box, ctx) shouldBe true
+      val ordinary = new ErgoBox(box.value, org.ergoplatform.settings.Constants.TrueTree,
+        Colls.emptyColl, Map.empty, ErgoBox.allZerosModifierId, 0.toShort, height - 1)
+      val unprivileged = ErgoTransaction(
+        IndexedSeq(org.ergoplatform.Input(ordinary.id, tx.inputs.head.spendingProof)), tx.dataInputs, tx.outputCandidates)
+      scriptValid(unprivileged, ordinary, ctx) shouldBe true
+      valid(unprivileged, ordinary, ctx) shouldBe false
+    }
   }
 
   property("both validation layers reject omitted, redirected or underpaid founder payouts") {

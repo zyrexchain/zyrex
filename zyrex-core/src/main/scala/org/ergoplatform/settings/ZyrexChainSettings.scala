@@ -12,7 +12,13 @@ import sigma.crypto.CryptoConstants
 import sigma.data.ProveDlog
 
 /** The two recipients and network identity are committed in the genesis emission script. */
-case class ZyrexChainSettings(networkTag: Int, founderPubkeys: Seq[String]) {
+case class ZyrexChainSettings(networkTag: Int,
+                              founderPubkeys: Seq[String],
+                              daaActivationHeight: Option[Int] = None,
+                              daaActivationEpochLength: Option[Int] = None) {
+  require(daaActivationHeight.forall(_ > 1), "DAA activation must follow genesis")
+  require(daaActivationEpochLength.isEmpty || daaActivationHeight.nonEmpty,
+    "A shorter DAA epoch requires an announced activation height")
   require(founderPubkeys.size == 2, "Zyrex requires exactly two founder public keys")
   require(founderPubkeys.map(_.toLowerCase(java.util.Locale.ROOT)).distinct.size == 2,
     "Founder public keys must be distinct")

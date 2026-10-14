@@ -67,6 +67,7 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
     private final JProgressBar activity = new JProgressBar();
     private final WalletOnboarding onboarding;
     private final SendPanel send;
+    private final SendController transfers;
     private final JTabbedPane tabs = new JTabbedPane();
     private final JLabel confirmed = new JLabel("—");
     private final JLabel pending = Ui.muted("—");
@@ -105,6 +106,9 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
         history = new WalletHistory(manager.dataHome());
         onboarding = new WalletOnboarding(this);
         send = new SendPanel(this);
+        transfers = new SendController(this, send, history, new PendingTransferStore(manager.dataHome()), () -> api,
+            () -> snapshot.addresses, () -> !busy && connected && !closing && snapshot != null
+                && snapshot.caughtUp() && snapshot.unlocked(), () -> snapshot.balance(), this::action);
         setName("zyrex-desktop");
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         Rectangle workArea = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
@@ -472,6 +476,7 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
             : !snapshot.caughtUp() ? "Wait for the node and wallet scan to catch up to connected peers."
             : !string(snapshot.status, "error").isEmpty() ? "Wallet scan needs attention before sending." : "";
         send.setReady(reason.isEmpty() && !closing, reason, initialized ? snapshot.balance() : 0);
+        send.setRetryAvailable(transfers.hasPending());
         onboarding.setBusy(busy || !connected || closing);
     }
 
@@ -560,30 +565,18 @@ public final class WalletWindow extends JFrame implements WalletOnboarding.Host,
     }
 
     @Override public void confirmSend(String address, long amount, long fee, Consumer<String> success) {
-        if (busy || snapshot == null || !snapshot.caughtUp() || !snapshot.unlocked() || !connected) return;
-        JPanel details = new JPanel(new GridLayout(0, 1, 0, 10));
-        details.add(new JLabel("Send " + Units.format(amount) + " ZYRX on the public testnet"));
-        JTextField recipient = new JTextField(address, 48);
-        recipient.setEditable(false);
-        recipient.setBorder(Ui.inputBorder());
-        details.add(recipient);
-        details.add(new JLabel("Network fee: " + Units.format(fee) + " ZYRX"));
-        details.add(new JLabel("Total: " + Units.format(Math.addExact(amount, fee)) + " ZYRX"));
-        details.add(Ui.muted("Check the complete recipient address before confirming."));
-        int answer = JOptionPane.showOptionDialog(this, details, "Confirm transaction", JOptionPane.OK_CANCEL_OPTION,
-            JOptionPane.PLAIN_MESSAGE, null, new Object[] {"Send ZYRX", "Cancel"}, "Cancel");
-        if (answer != 0) return;
-        String walletAddress = snapshot.addresses.get(0);
-        action("Signing and submitting your transaction…", () -> {
-            String id = api.send(address, amount, fee);
-            history.record(id, walletAddress, address, amount, fee);
-            return id;
-        }, id -> {
-            success.accept(id);
-            WalletHistory.Row submitted = history.submittedRow(id, snapshot.addresses);
-            if (submitted != null && snapshot.history.rows.stream().noneMatch(row -> row.id.equals(id))) snapshot.history.rows.add(0, submitted);
-            updateHistory(snapshot);
-        });
+        transfers.review(address, amount, fee, id -> showSubmission(id, success));
+    }
+
+    @Override public void retrySend(Consumer<String> success) {
+        transfers.retry(id -> showSubmission(id, success));
+    }
+
+    private void showSubmission(String id, Consumer<String> success) {
+        success.accept(id);
+        WalletHistory.Row submitted = history.submittedRow(id, snapshot.addresses);
+        if (submitted != null && snapshot.history.rows.stream().noneMatch(row -> row.id.equals(id))) snapshot.history.rows.add(0, submitted);
+        updateHistory(snapshot);
     }
 
     private <T> void action(String description, Callable<T> work, Consumer<T> success) {

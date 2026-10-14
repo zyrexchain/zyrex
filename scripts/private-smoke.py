@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the running three-node private network without erasing node data."""
 import argparse
+import hashlib
 import json
 import subprocess
 import time
@@ -8,8 +9,10 @@ from pathlib import Path
 import urllib.request
 
 
-def api(port, path):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers={"api_key": "hello"})
+def api(port, path, body=None):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data,
+                                 headers={"api_key": "hello", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as response:
         return json.load(response)
 
@@ -38,6 +41,12 @@ def main():
     parser.add_argument("--report", default=".local/private-smoke.json")
     args = parser.parse_args()
     ports = [19555, 19556, 19557]
+    assembly_digest = hashlib.sha256(Path("target/scala-2.12/zyrex.jar").read_bytes()).hexdigest()
+    for node in ("node1", "node2", "node3"):
+        measured = subprocess.check_output(["docker", "compose", "exec", "-T", node,
+                                            "sha256sum", "/opt/zyrex/zyrex.jar"], text=True).split()[0]
+        if measured != assembly_digest:
+            raise RuntimeError("The private node differs from the assembled test binary")
     until("Three nodes have applied mined blocks", lambda: all(height(p) >= 34 for p in ports))
     until("P2P peers connected", lambda: all(api(p, "/info").get("peersCount", 0) > 0 for p in ports))
     target = min(height(p) for p in ports)
@@ -69,6 +78,20 @@ def main():
     transaction = json.loads(result.stdout)
     until("CLI payment confirmed in receiving wallet", lambda:
           api(19556, "/wallet/balances")["balance"] >= before + 1_000_000_000)
+    automatic = subprocess.run(["bin/zyrex-wallet", "send", receiver, "0.25", "--fee", "auto"],
+                               check=True, capture_output=True, text=True)
+    auto_transaction = json.loads(automatic.stdout)
+    until("Auto-fee CLI payment confirmed in receiving wallet", lambda:
+          api(19556, "/wallet/balances")["balance"] >= before + 1_250_000_000)
+
+    def confirmed_auto_payment():
+        transaction = api(19556, "/wallet/transactionById?id=" + auto_transaction)
+        return transaction if transaction.get("numConfirmations", 0) >= 1 else None
+
+    confirmed = until("Auto-fee CLI transaction included in a block", confirmed_auto_payment)
+    quote = api(19555, "/transactions/feeQuote?waitTime=1", confirmed)
+    if quote["txId"] != auto_transaction or not 1_000_000 <= int(quote["paidFeeNano"]) <= 10_000_000:
+        raise RuntimeError("Confirmed Auto payment differs from its signed ID or fee bounds")
     restarted = False
     if args.restart:
         old_height = height(19557)
@@ -89,6 +112,11 @@ def main():
     report = {"network": "private-testnet", "genesisId": genesis["header"]["id"],
               "sharedHeight": target, "sharedBlockId": chain_ids[0],
               "checkedBlocks": checked, "cliPaymentTxId": transaction,
+              "cliAutoPaymentTxId": auto_transaction, "cliAutoPaymentConfirmations": confirmed["numConfirmations"],
+              "cliAutoPaymentFeeNano": quote["paidFeeNano"], "cliAutoSignedSize": quote["txSize"],
+              "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "sourceClean": not bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()),
+              "nodeJarSha256": assembly_digest, "runtimeJarHashesVerified": True,
               "restartVerified": restarted, "gpuVerified": False}
     dest = Path(args.report)
     dest.parent.mkdir(parents=True, exist_ok=True)

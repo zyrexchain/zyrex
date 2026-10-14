@@ -16,6 +16,9 @@ import scorex.util.ByteArrayBuilder
 import scorex.util.serialization.VLQByteBufferWriter
 import scorex.utils.{Random => RandomBytes}
 
+import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
+
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
@@ -66,7 +69,7 @@ class VersionedLDBAVLStorageSpecification
     prover.checkTree(true)
   }
 
-  // Read-only access to some elements in parallel should not affect modifications application
+  // Native callers share the prover monitor: digest also mutates the lazy node-label cache.
   val parallelReadTest: PERSISTENT_PROVER => Try[Unit] = {
     def performModifications(prover: PERSISTENT_PROVER, inserts: Seq[Insert]) = {
       inserts.foldLeft[Try[Option[ADValue]]](Success(None)) { case (t, m) =>
@@ -75,40 +78,65 @@ class VersionedLDBAVLStorageSpecification
       prover.generateProofAndUpdateStorage()
     }
 
-    def startParallelReads(prover: PERSISTENT_PROVER) = {
-      Future {
-        def loop(): Unit = {
-          Thread.sleep(10)
-          Try(prover.digest)
-          loop()
-        }
-
-        loop()
-      }
-    }
-
-    prover: PERSISTENT_PROVER =>
+    prover: PERSISTENT_PROVER => Try {
       val pairs = (1 to 10000).map(_ => kvGen.sample.get)
-      pairs.foreach(p => prover.performOneOperation(Insert(p._1, p._2)))
-      prover.generateProofAndUpdateStorage
+      prover.synchronized {
+        pairs.foreach(p => prover.performOneOperation(Insert(p._1, p._2)).get)
+        prover.generateProofAndUpdateStorage()
+      }
 
       val blocks: Seq[Seq[Insert]] = (0 until 10).map(_ => (0 until 10).flatMap(_ => kvGen.sample)
         .map(kv => Insert(kv._1, kv._2)))
 
-      val parallelReadsFuture = startParallelReads(prover)
-      // apply blocks
-      blocks.foldLeft(prover.digest) { (startRoot, block) =>
-        prover.digest shouldEqual startRoot
-
-        performModifications(prover, block)
-        prover.rollback(startRoot)
-        Base16.encode(prover.digest) shouldBe Base16.encode(startRoot)
-
-        performModifications(prover, block)
-
-        prover.digest
+      final class ReadGate {
+        val attempted = new CountDownLatch(1)
+        val completed = new CountDownLatch(1)
+        val expectedDigest = new AtomicReference[ADDigest]()
       }
-      Try(Await.result(parallelReadsFuture, 0.millis))
+      val running = new AtomicBoolean(true)
+      val reads = new AtomicInteger()
+      val requests = new LinkedBlockingQueue[ReadGate](1)
+      val parallelReadsFuture = Future {
+        while (running.get()) {
+          val gate = requests.poll(100, TimeUnit.MILLISECONDS)
+          if (gate != null) {
+            // The writer holds the monitor until this read attempts to acquire it.
+            gate.attempted.countDown()
+            try {
+              prover.synchronized {
+                Base16.encode(prover.digest) shouldBe Base16.encode(gate.expectedDigest.get())
+              }
+              reads.incrementAndGet()
+            } finally gate.completed.countDown()
+          }
+        }
+      }
+      try {
+        blocks.foldLeft(prover.synchronized(prover.digest)) { (startRoot, block) =>
+          val gate = new ReadGate
+          val updated = prover.synchronized {
+            requests.offer(gate) shouldBe true
+            gate.attempted.await(5, TimeUnit.SECONDS) shouldBe true
+            // These exact rollback assertions are unchanged; the shared lock is the node's API contract.
+            prover.digest shouldEqual startRoot
+            performModifications(prover, block)
+            prover.rollback(startRoot).get
+            Base16.encode(prover.digest) shouldBe Base16.encode(startRoot)
+            performModifications(prover, block)
+            val result = prover.digest
+            gate.expectedDigest.set(result)
+            result
+          }
+          gate.completed.await(5, TimeUnit.SECONDS) shouldBe true
+          updated
+        }
+        reads.get() shouldBe blocks.size
+      } finally {
+        running.set(false)
+        Await.result(parallelReadsFuture, 5.seconds)
+      }
+      parallelReadsFuture.isCompleted shouldBe true
+    }
   }
 
 
@@ -306,7 +334,7 @@ class VersionedLDBAVLStorageSpecification
 
   property("Persistence AVL batch prover - parallel read-write") {
     val prover = createPersistentProver()
-    parallelReadTest(prover)
+    parallelReadTest(prover).get
   }
 
 
@@ -318,6 +346,38 @@ class VersionedLDBAVLStorageSpecification
   property("Persistence AVL batch prover - rollback") {
     val prover = createPersistentProver()
     rollbackTest(prover)
+  }
+
+  property("unknown rollback versions fail without changing the current tree or stored state") {
+    val store = createVersionedStore()
+    val storage = createVersionedStorage(store)
+    val prover = createPersistentProver(storage)
+    val key1 = ADKey @@ Blake2b256("rollback-key-1").take(KL)
+    val key2 = ADKey @@ Blake2b256("rollback-key-2").take(KL)
+    val value1 = ADValue @@ Blake2b256("rollback-value-1").take(VL)
+    val value2 = ADValue @@ Blake2b256("rollback-value-2").take(VL)
+    try {
+      prover.performOneOperation(Insert(key1, value1)).get
+      prover.generateProofAndUpdateStorage()
+      val firstDigest = prover.digest
+      prover.performOneOperation(Insert(key2, value2)).get
+      prover.generateProofAndUpdateStorage()
+      val currentDigest = prover.digest
+      val unknown = ADDigest @@ Array.fill(33)(42.toByte)
+      storage.rollbackVersions.exists(_.sameElements(unknown)) shouldBe false
+
+      prover.rollback(unknown).isFailure shouldBe true
+      Base16.encode(prover.digest) shouldBe Base16.encode(currentDigest)
+      Base16.encode(storage.version.get) shouldBe Base16.encode(currentDigest)
+      prover.unauthenticatedLookup(key1).map(_.toSeq) shouldBe Some(value1.toSeq)
+      prover.unauthenticatedLookup(key2).map(_.toSeq) shouldBe Some(value2.toSeq)
+
+      prover.rollback(firstDigest).get
+      Base16.encode(prover.digest) shouldBe Base16.encode(firstDigest)
+      Base16.encode(storage.version.get) shouldBe Base16.encode(firstDigest)
+      prover.unauthenticatedLookup(key1).map(_.toSeq) shouldBe Some(value1.toSeq)
+      prover.unauthenticatedLookup(key2) shouldBe None
+    } finally store.close()
   }
 
 

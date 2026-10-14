@@ -5,6 +5,7 @@ WORKDIR /opt/zyrex-pool
 COPY pow.py ledger.py node.py server.py index.html logo.png ./
 COPY resource_limits.py chain_ledger.py query_budget.py reconciliation.py header_message.py ./
 COPY job_lifecycle.py ./
+COPY fee_policy.py ./
 USER zyrex
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 EXPOSE 3333 8088

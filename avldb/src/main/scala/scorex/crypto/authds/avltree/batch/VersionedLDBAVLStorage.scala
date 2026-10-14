@@ -43,7 +43,7 @@ class VersionedLDBAVLStorage(store: LDBVersionedStore)
   override def rollback(version: ADDigest): Try[(ProverNodes[DigestType], Int)] = Try {
     if (!this.version.contains(version)) { // do not rollback to self
       log.info(s"Doing rollback from ${this.version.map(Base16.encode)} to ${Base16.encode(version)}:")
-      store.rollbackTo(version)
+      store.rollbackTo(version).get
     }
   }.flatMap(_ => restorePrunedRootNode())
     .recoverWith { case e =>

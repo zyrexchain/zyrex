@@ -76,7 +76,7 @@ object ZyrexDaaSimulation {
       "profile" -> Json.fromString(profile.name),
       "scenario" -> Json.fromString(scenario),
       "algorithm" -> Json.fromString(
-        if (positiveFloor) "eip37-positive-floor-candidate"
+        if (positiveFloor) "guarded-eip37-disabled-hook"
         else if (eip37) "eip37-candidate"
         else "legacy-live"),
       "epochLength" -> Json.fromInt(profile.epochLength),
@@ -124,7 +124,7 @@ object ZyrexDaaSimulation {
       epoch => if (epoch < 2) -600000L else 0L)
   )
 
-  /** Match the legacy branch; omit the nonexistent height-zero header. */
+  /** Native epoch endpoint selection omits the nonexistent height-zero header. */
   def nextDifficulty(
       control: DifficultyAdjustment,
       parent: Header,
@@ -138,10 +138,12 @@ object ZyrexDaaSimulation {
       val required = control.previousHeightsRequiredForRecalculation(
         parent.height + 1, length)
       val headers = required.flatMap(epochs.get)
-      val calculated = if (eip37 && headers.size >= 2) {
+      val calculated = if (positiveFloor) {
+        control.guardedEip37Calculate(headers, length)
+      } else if (eip37 && headers.size >= 2) {
         control.eip37Calculate(headers, length)
       } else control.calculate(headers, length)
-      if (positiveFloor) calculated.max(BigInt(1)) else calculated
+      calculated
     }
   }
 
@@ -203,6 +205,56 @@ object ZyrexDaaSimulation {
     hash.map(byte => f"${byte & 0xff}%02x").mkString
   }
 
+  /** Proposed shorter period: warm up under the old rules, then use only the announced anchor and later endpoints. */
+  def simulateShorterEpoch(profile: Profile, scenario: Scenario, length: Int,
+                           start: BigInt = ReferenceDifficulty): Result = {
+    require(length > 1 && length < profile.epochLength && profile.epochLength % length == 0,
+      "The disabled shorter-period proposal must divide the source epoch")
+    val control = profile.calculator
+    val anchor = WarmupEpochs * profile.epochLength
+    val activation = anchor + 1
+    val endpoints = mutable.Map.empty[Int, Header]
+    val rows = Vector.newBuilder[Epoch]
+    var parent = baseHeader.copy(nBits = DifficultySerializer.encodeCompactBits(start))
+    val baseline = parent.requiredDifficulty
+    var now = 0L
+    var epochStart = 0L
+    var epochDifficulty = baseline
+    def activatedDifficulty: BigInt = {
+      val heights = control.postActivationHeights(parent.height, activation, length)
+      if (heights.isEmpty) parent.requiredDifficulty
+      else control.guardedEip37Calculate(heights.map(endpoints), length)
+    }
+    while (parent.height < anchor + length * StressEpochs) {
+      val height = parent.height + 1
+      val active = height >= activation
+      val stressIndex = if (active) (height - activation) / length else -1
+      val (numerator, denominator) = if (active) scenario.rate(stressIndex) else (1, 1)
+      val difficulty = if (active) activatedDifficulty else nextDifficulty(control, parent, endpoints)
+      require(difficulty > 0, "Activated difficulty must remain positive")
+      if (active && (height - activation) % length == 0) epochDifficulty = difficulty
+      val divisor = baseline * numerator
+      val dividend = difficulty * profile.intervalMillis * denominator
+      now = Math.addExact(now, ((dividend + divisor - 1) / divisor).max(1).toLong)
+      val drift = if (active) scenario.drift(stressIndex) else 0L
+      val timestamp = Math.max(parent.timestamp + 1, now + drift)
+      require(timestamp - now <= profile.intervalMillis * 10, "Future timestamp exceeds node bound")
+      parent = parent.copy(height = height, timestamp = timestamp,
+        nBits = DifficultySerializer.encodeCompactBits(difficulty))
+      if (!active && height % profile.epochLength == 0) {
+        endpoints(height) = parent
+        endpoints.keys.filter(_ < height - profile.epochLength * profile.useLastEpochs).toVector.foreach(endpoints.remove)
+        epochStart = now
+      } else if (active && (height - anchor) % length == 0) {
+        endpoints(height) = parent
+        endpoints.keys.filter(_ < (height - length * profile.useLastEpochs).max(anchor)).toVector.foreach(endpoints.remove)
+        rows += Epoch(stressIndex + 1, now - epochStart, height, epochDifficulty, activatedDifficulty)
+        epochStart = now
+      }
+    }
+    Result(profile.copy(epochLength = length), scenario.name, baseline, rows.result(), eip37 = true, positiveFloor = true)
+  }
+
   def report: Json = {
     val coreSource = "zyrex-core/src/main/scala/org/ergoplatform/mining/difficulty/"
     val coreTests = "zyrex-core/src/test/scala/org/ergoplatform/mining/difficulty/"
@@ -210,6 +262,8 @@ object ZyrexDaaSimulation {
     val sources = Vector(
       coreSource + "DifficultyAdjustment.scala",
       coreSource + "DifficultySerializer.scala",
+      "zyrex-core/src/main/scala/org/ergoplatform/settings/ZyrexChainSettings.scala",
+      "zyrex-core/src/main/scala/org/ergoplatform/settings/ChainSettings.scala",
       headerSource + "storage/modifierprocessors/HeadersProcessor.scala",
       coreTests + "ZyrexDaaSimulation.scala",
       "src/main/resources/devnet.conf",
@@ -234,6 +288,25 @@ object ZyrexDaaSimulation {
       simulate(profile, departure, BigInt(profile.initialDifficultyHex, 16),
         eip37 = true, positiveFloor = true)
     }
+    val growth = scenarios.find(_.name == "hashrate_x4").get
+    val bootstrapRuns = profiles.map { profile =>
+      Json.obj("liveRulesChanged" -> Json.False,
+        "guarded" -> simulate(profile, growth, BigInt(1), eip37 = true, positiveFloor = true).json,
+        "rawEip37" -> simulate(profile, growth, BigInt(1), eip37 = true).json)
+    }
+    val shorterCandidates = profiles.filter(_.epochLength > 16).flatMap { profile =>
+      Seq(4, 16).flatMap { length =>
+        (scenarios.map(scenario => simulateShorterEpoch(profile, scenario, length)) ++ Seq(
+          simulateShorterEpoch(profile, departure, length, BigInt(1)),
+          simulateShorterEpoch(profile, growth, length, BigInt(1)))).map { result =>
+          Json.obj("liveRulesChanged" -> Json.False,
+            "sourceEpochLength" -> Json.fromInt(profile.epochLength),
+            "proposedEpochLength" -> Json.fromInt(length),
+            "modelActivationHeight" -> Json.fromInt(WarmupEpochs * profile.epochLength + 1),
+            "result" -> result.json)
+        }
+      }
+    }
     val failures = initialProfiles.map { profile =>
       val error = scala.util.Try(
         simulate(profile, departure,
@@ -250,7 +323,7 @@ object ZyrexDaaSimulation {
     }
     Json.obj(
       "calculator" -> Json.fromString(
-        "native calculate, native eip37Calculate, and candidate normalized-result floor"),
+        "native calculate, native eip37Calculate, and guardedEip37Calculate with disabled activation"),
       "model" -> Json.fromString("deterministic expected block time; " +
         "integer millisecond ceiling; no stochastic PoW or network"),
       "warmupEpochs" -> Json.fromInt(WarmupEpochs),
@@ -260,6 +333,8 @@ object ZyrexDaaSimulation {
       "results" -> Json.arr(
         (results ++ initialDifficultyRuns ++ guardedResults ++ guardedInitialRuns)
           .map(_.json): _*),
+      "shorterEpochCandidateRuns" -> Json.arr(shorterCandidates: _*),
+      "guardedDifficultyOneGrowthRuns" -> Json.arr(bootstrapRuns: _*),
       "failedCandidateRuns" -> Json.arr(failures: _*)
     )
   }

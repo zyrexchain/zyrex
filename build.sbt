@@ -11,6 +11,10 @@ lazy val commonSettings = Seq(
   organization := "org.zyrex",
   name := "zyrex",
   scalaVersion := scala212,
+  dependencyOverrides ++= Seq(
+    "org.typelevel" %% "jawn-parser" % "1.7.0",
+    "com.google.guava" % "guava" % "32.1.3-jre"
+  ),
   // version is set via git tag vX.Y.Z:
   // $ git tag v3.2.0
   // $ git push origin v3.2.0
@@ -54,7 +58,7 @@ libraryDependencies ++= Seq(
     .exclude("ch.qos.logback", "logback-classic")
     .exclude("org.scorexfoundation", "scrypto"),
 
-  "ch.qos.logback" % "logback-classic" % "1.3.5",
+  "ch.qos.logback" % "logback-classic" % "1.6.5",
 
   // test dependencies
   "org.scala-lang.modules" %% "scala-async" % "1.0.1" % "test",
