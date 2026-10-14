@@ -13,6 +13,22 @@ The miner username is `ZYREX_ADDRESS.worker_name`; password `x` enables automati
 share difficulty. A password such as `d=0.1` selects a fixed Miningcore-compatible
 difficulty. TLS requires support from the chosen miner.
 
+## Work updates
+
+New block parents revoke previous jobs through `mining.notify` with `clean_jobs=true`.
+On a transaction-only refresh, compatible jobs remain valid only while the native
+node includes their messages in its atomic mining-cache snapshot. Identical work
+is not repeatedly assigned new job IDs. Each connection has a bounded notification
+sender, so a slow worker does not delay updates to other workers.
+
+Share verification rechecks job validity before durable credit. A block solution
+is persisted and acknowledged without waiting for the node RPC; further solutions
+for that work are paused until the node applies it or fresh node state permits
+recovery. This preserves honest stale accounting during races and RPC failures.
+The pool API reports accepted, stale and rejected work by reason under
+`workResults`; these diagnostics cover the current pool process lifetime.
+Network latency and competing blocks can still produce stale shares.
+
 ## Miner accounts
 
 Open a payout address on the pool website to view its read-only miner account.
@@ -52,7 +68,7 @@ an RPC timeout or process restart. The database is pinned to the genesis and min
 
 Automated tests cover reference PoW vectors, network address isolation,
 actual TCP Stratum messages, rejected shares, exact PROP allocations, orphan
-rounds, maturity constraints and signed-payment recovery.
+rounds, maturity constraints, signed-payment recovery and mining-job races.
 
 Live Stratum mining has been exercised on the test network, including accepted
 blocks, mandatory team outputs and confirmed pool payouts.

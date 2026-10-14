@@ -42,6 +42,10 @@ class Node:
             body = response.read()
             return json.loads(body) if body else None
 
+    def work(self):
+        # Opt-in metadata is additive; older nodes ignore the query and retain conservative handling.
+        return self.rpc("/mining/candidate?details=true")
+
     def ready(self):
         info = self.rpc("/info")
         network = self.config.get("network", "devnet")

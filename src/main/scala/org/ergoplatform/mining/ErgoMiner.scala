@@ -2,7 +2,7 @@ package org.ergoplatform.mining
 
 import akka.actor.{Actor, ActorRef, ActorRefFactory, Props, Stash}
 import akka.pattern.StatusReply
-import org.ergoplatform.mining.CandidateGenerator.{GenerateCandidate, SubmitSolution}
+import org.ergoplatform.mining.CandidateGenerator.{GenerateCandidate, ReadCandidateDetails, SubmitSolution}
 import org.ergoplatform.nodeView.state.DigestState
 import org.ergoplatform.nodeView.ErgoNodeViewHolder.ReceivableMessages.GetDataFromCurrentView
 import org.ergoplatform.modifiers.history.header.Header
@@ -176,6 +176,9 @@ class ErgoMiner(
     case GenerateCandidate(_, _, _, _) =>
       sender() ! StatusReply.error("Miner has not started yet")
 
+    case ReadCandidateDetails =>
+      sender() ! StatusReply.error("Miner has not started yet")
+
     case _: SubmitSolution =>
       sender() ! StatusReply.error(MiningSolutionSelection.Rejected("Miner has not started yet"))
   }
@@ -186,6 +189,9 @@ class ErgoMiner(
   def started(minerState: MinerState): Receive = {
     case genCandidate @ GenerateCandidate(_, _, _, _) =>
       minerState.candidateGeneratorRef forward genCandidate
+
+    case ReadCandidateDetails =>
+      minerState.candidateGeneratorRef forward ReadCandidateDetails
 
     case solution: AutolykosSolution =>
       minerState.candidateGeneratorRef forward solution

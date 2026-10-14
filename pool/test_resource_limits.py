@@ -350,6 +350,10 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
         with patch("server.hit", return_value=2):
             first = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000001"]
             self.assertTrue((await self.request(pair, "mining.submit", first))["result"])
+            # Share admission is acknowledged before the separate native RPC completes.
+            async with asyncio.timeout(2):
+                while self.pool.solution_ack_at is None:
+                    await asyncio.sleep(0.002)
             ack = self.pool.solution_ack_at
             self.assertIsNotNone(ack)
             self.assertEqual(self.pool.solution_ack_height, 614400)
@@ -397,7 +401,7 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
         pair, _, previous_job = await self.worker()
         self.pool.node.pk = PK
         self.pool.node.ready.return_value = dict(info)
-        self.pool.node.rpc.return_value = dict(self.pool.work)
+        self.pool.node.work.return_value = dict(self.pool.work)
         self.pool.config["genesisId"] = "f" * 64
         self.pool.last_reconcile = time.monotonic()
         self.pool.reconcile_task = None
@@ -417,7 +421,8 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.pool.solved_height, 614399)
             self.assertIsNone(self.pool.solution_ack_at)
             self.pool.node.ready.assert_called_once()
-            self.pool.node.rpc.assert_called_once_with("/mining/candidate")
+            self.pool.node.work.assert_called_once_with()
+            self.pool.node.rpc.assert_not_called()
             self.assertTrue(self.pool.ready())
             self.assertEqual(self.pool.ledger.blocks(), [])
         finally:
@@ -427,8 +432,8 @@ class PoolResourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_ack_expiration_does_not_release_a_manually_set_marker_without_native_ack(self):
         self.pool.info = {"fullHeight": 614399, "headersHeight": 614399,
                           "bestFullHeaderId": "a" * 64, "bestHeaderId": "a" * 64}
-        self.pool.solved_height = 614400
         pair, prefix, job = await self.worker()
+        self.pool.solved_height = 614400
         self.assertFalse(self.pool.expire_solution_ack(self.pool.work, True, now=time.monotonic() + 1000))
         self.assertEqual(self.pool.solved_height, 614400)
         params = [ADDRESS1 + ".control", job[0], "0", "0", prefix + "000000000001"]

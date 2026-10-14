@@ -16,21 +16,13 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 from ledger import Ledger
+from job_lifecycle import ClientJobs, PoolJobs, SOLUTION_ACK_SECONDS, StratumError, WorkResults, candidate_work
 from node import Node
 from pow import DIFF1, MAX_TARGET, hit, validate_miner_address
 from resource_limits import Admission, DuplicateCache, ResourceBusy, TokenBucket, WorkLane, networks, proxy_identity, trusted
 
 LOG = logging.getLogger("zyrex-pool")
-SOLUTION_ACK_SECONDS = 20
-
-
-class StratumError(Exception):
-    def __init__(self, code, message):
-        self.code = code
-        super().__init__(message)
-
-
-class Client:
+class Client(ClientJobs):
     def __init__(self, pool, reader, writer, prefix, identity=None):
         self.pool, self.reader, self.writer = pool, reader, writer
         self.prefix = prefix
@@ -39,6 +31,11 @@ class Client:
         self.address = None
         self.worker = None
         self.jobs = OrderedDict()
+        self.retired_jobs = OrderedDict()
+        self.job_lock = asyncio.Lock()
+        self.notification_task = None
+        self.pending_notification = False
+        self.pending_clean = False
         self.write_lock = asyncio.Lock()
         self.hashes = pool.config["initialShareHashes"]
         self.last_share = None
@@ -66,21 +63,6 @@ class Client:
 
     async def notify(self, method, params):
         await self.send({"id": None, "method": method, "params": params})
-
-    async def job(self, clean):
-        if not self.subscribed or not self.username or not self.pool.ready():
-            return
-        work = self.pool.work
-        # Block solutions must always qualify as shares, including this young devnet.
-        target = max(work["b"], MAX_TARGET // max(1, self.hashes))
-        weight = (1 << 256) // target
-        job_id = secrets.token_hex(8)
-        self.jobs[job_id] = (dict(work), target, weight)
-        while len(self.jobs) > 4:
-            self.jobs.popitem(last=False)
-        await self.notify("mining.set_difficulty", [1])
-        await self.notify("mining.notify", [job_id, work["h"], work["msg"], "", "", 4, str(target), "", clean])
-        self.last_send = time.monotonic()
 
     def activate(self):
         if not self.active and self.subscribed and self.username:
@@ -146,6 +128,8 @@ class Client:
             raise StratumError(20, "Unsupported method")
 
     async def submit(self, ident, params):
+        if self.pool.stopping:
+            raise StratumError(21, "Pool is shutting down", "pool_stopping")
         if not self.share_budget.take():
             self.pool.resources.denied_shares += 1
             raise StratumError(26, "Share request budget exceeded")
@@ -155,11 +139,11 @@ class Client:
             raise StratumError(24, "Unauthorized worker")
         if len(params) not in (3, 5) or not all(isinstance(p, str) for p in params):
             raise StratumError(20, "Expected worker, job, extranonce2, ntime, nonce")
-        if not self.pool.ready() or params[1] not in self.jobs:
-            raise StratumError(21, "Stale or unknown job")
-        work, target, weight = self.jobs[params[1]]
-        if work["h"] != self.pool.work["h"] or work["h"] <= self.pool.solved_height:
-            raise StratumError(21, "Stale job height")
+        job = self.jobs.get(params[1])
+        if job is None:
+            raise StratumError(21, "Stale or unknown job", self.retired_jobs.get(params[1], "unknown_job"))
+        self.pool.check_job(job)
+        work, target, weight = job
         nonce_hex = params[-1].lower()
         if not re.fullmatch(r"[0-9a-f]{16}", nonce_hex) or not nonce_hex.startswith(self.prefix):
             raise StratumError(20, "Nonce must contain the assigned extranonce1 and be 8 bytes")
@@ -179,37 +163,85 @@ class Client:
         except sqlite3.Error as error:
             self.pool.duplicates.release(key)
             raise StratumError(26, "Accounting is temporarily unavailable") from error
+        try:
+            self.pool.check_job(job)
+        except StratumError:
+            self.pool.duplicates.release(key)
+            raise
         if score >= target:
             raise StratumError(23, "Low difficulty share")
-        if not self.pool.ready() or params[1] not in self.jobs or work["h"] != self.pool.work["h"] \
-                or work["h"] <= self.pool.solved_height:
-            raise StratumError(21, "Stale job height")
+        solution = score < work["b"]
         try:
-            await self.pool.lanes["writes"].run(
-                self.pool.record_share, work, nonce_hex, self.address, self.worker, weight, score < work["b"])
+            if solution:
+                # A second completed GPU batch must not create another block or RPC while the first is in flight.
+                while True:
+                    self.pool.check_job(job)
+                    if self.pool.solution_task is not None and not self.pool.solution_task.done():
+                        await asyncio.shield(self.pool.solution_task)
+                        continue
+                    async with self.pool.submit_lock:
+                        self.pool.check_job(job)
+                        if self.pool.solution_task is not None and not self.pool.solution_task.done():
+                            continue
+                        await self.commit_share(job, nonce_hex, weight, True)
+                        pending = {"job": job, "at": time.monotonic(), "rpcPending": True}
+                        self.pool.pending_solution = pending
+                        task = asyncio.create_task(self.send_solution(job, nonce_hex))
+                        task.add_done_callback(lambda result: result.exception() if not result.cancelled() else None)
+                        self.pool.solution_task = task
+                    break
+                # Network backpressure or a disconnected miner cannot delay or cancel the node submission.
+                await self.response(ident, True)
+                await self.retarget(weight)
+                return
+            await self.commit_share(job, nonce_hex, weight, False)
         except sqlite3.IntegrityError as error:
             raise StratumError(22, "Duplicate share") from error
         except ResourceBusy as error:
             self.pool.duplicates.release(key)
             raise StratumError(26, "Accounting queue is full; reconnect later") from error
+        except StratumError:
+            self.pool.duplicates.release(key)
+            raise
+        await self.response(ident, True)
+        await self.retarget(weight)
+
+    async def commit_share(self, job, nonce, weight, solution):
+        work = job[0]
+        await self.pool.lanes["writes"].run(
+            self.pool.record_share, work, nonce, self.address, self.worker, weight, solution, job)
         self.accepted += 1
+        self.pool.work_results.accepted += 1
         now = time.monotonic()
         if self.last_share is not None and self.static_difficulty is None:
             self.intervals.append(now - self.last_share)
         self.last_share = now
-        # A durable submission record also covers an RPC timeout after the node accepted.
-        if score < work["b"]:
-            try:
-                async with self.pool.submit_lock:
-                    await self.pool.lanes["solutions"].run(
-                        self.pool.node.rpc, "/mining/solution", {"n": nonce_hex, "pk": work["pk"], "msg": work["msg"]})
-                    if params[1] in self.jobs:
-                        self.pool.acknowledge_solution(work["h"])
-                LOG.info("Block submitted: height=%s worker=%s nonce=%s", work["h"], self.username, nonce_hex)
-                self.pool.refresh.set()
-            except (OSError, ValueError, TimeoutError, ResourceBusy) as error:
-                LOG.warning("Block RPC response uncertain at height %s: %s", work["h"], type(error).__name__)
-        await self.response(ident, True)
+
+    async def send_solution(self, job, nonce):
+        work = job[0]
+        # Pool ownership keeps the durable solution independent of the miner's acknowledgement socket.
+        try:
+            self.pool.check_job(job, pending_allowed=True)
+            self.pool.work_results.native_submissions += 1
+            await self.pool.lanes["solutions"].run(
+                self.pool.node.rpc, "/mining/solution", {"n": nonce, "pk": work["pk"], "msg": work["msg"]})
+            if not job.invalid_reason and self.pool.ready() and work["h"] == self.pool.work["h"]:
+                self.pool.acknowledge_solution(work["h"])
+            LOG.info("Block submitted: height=%s worker=%s nonce=%s", work["h"], self.username, nonce)
+        except StratumError:
+            if self.pool.pending_solution is not None and self.pool.pending_solution.get("job") is job:
+                self.pool.pending_solution = None
+            LOG.info("Completed solution belongs to superseded work at height %s", work["h"])
+        except (OSError, ValueError, TimeoutError, ResourceBusy) as error:
+            self.pool.work_results.native_uncertain += 1
+            LOG.warning("Block RPC response uncertain at height %s: %s", work["h"], type(error).__name__)
+        finally:
+            if self.pool.pending_solution is not None and self.pool.pending_solution.get("job") is job:
+                self.pool.pending_solution["rpcPending"] = False
+            self.pool.refresh.set()
+
+    async def retarget(self, weight):
+        now = time.monotonic()
         if self.static_difficulty is None and now - self.last_retarget >= 30 and len(self.intervals) >= 4:
             average = sum(self.intervals) / len(self.intervals)
             # Retarget toward one share / 10 seconds, bounded 4x per adjustment.
@@ -240,6 +272,8 @@ class Client:
                     self.rejected += 1
                     code = error.code if isinstance(error, StratumError) else 20
                     message = str(error) if isinstance(error, StratumError) else "Invalid JSON-RPC request"
+                    if isinstance(request, dict) and request.get("method") == "mining.submit":
+                        self.pool.work_results.reject(code, getattr(error, "reason", None))
                     ident = request.get("id") if isinstance(request, dict) else None
                     await self.response(ident, False, [code, message, None])
                     # Stale work is normal while a GPU drains a batch after a new
@@ -251,6 +285,9 @@ class Client:
         except (ConnectionError, OSError, asyncio.TimeoutError, ValueError):
             pass
         finally:
+            if self.notification_task is not None:
+                self.notification_task.cancel()
+                await asyncio.gather(self.notification_task, return_exceptions=True)
             self.pool.clients.discard(self)
             self.pool.resources.drop(self.pool.resources.active if self.active else self.pool.resources.pending, self.identity)
             self.writer.close()
@@ -260,7 +297,7 @@ class Client:
                 pass
 
 
-class Pool:
+class Pool(PoolJobs):
     def __init__(self, config):
         self.config = config
         self.node = Node(config)
@@ -285,6 +322,11 @@ class Pool:
         self.solved_height = getattr(self, "solved_height", 0)
         self.solution_ack_at = getattr(self, "solution_ack_at", None)
         self.solution_ack_height = getattr(self, "solution_ack_height", None)
+        self.pending_solution = getattr(self, "pending_solution", None)
+        self.solution_task = getattr(self, "solution_task", None)
+        self.stopping = getattr(self, "stopping", False)
+        self.client_tasks = getattr(self, "client_tasks", set())
+        self.work_results = getattr(self, "work_results", None) or WorkResults()
         if hasattr(self, "resources"):
             return
         self.resources = Admission(self.config)
@@ -306,7 +348,12 @@ class Pool:
         result["duplicateCacheEntries"] = len(self.duplicates.entries)
         result["duplicateCacheRejected"] = self.duplicates.rejected
         result["solvedHeight"] = self.solved_height
+        result["workResults"] = self.work_results.stats()
         result["pendingSolutionAck"] = None
+        pending = self.pending_solution
+        result["pendingSolutionSubmission"] = None if pending is None else {
+            "height": pending["job"][0]["h"], "ageSeconds": round(max(0, time.monotonic() - pending["at"]), 2),
+            "rpcPending": pending["rpcPending"], "timeoutSeconds": SOLUTION_ACK_SECONDS}
         height = (getattr(self, "info", None) or {}).get("fullHeight")
         if self.solution_ack_at is not None and type(height) is int and height < self.solution_ack_height:
             result["pendingSolutionAck"] = {"height": self.solution_ack_height,
@@ -314,12 +361,6 @@ class Pool:
                                             "timeoutSeconds": SOLUTION_ACK_SECONDS}
         result["queues"] = {name: lane.stats() for name, lane in self.lanes.items()}
         return result
-
-    def record_share(self, work, nonce, address, worker, weight, solution):
-        ident = self.ledger.share(work["msg"], nonce, address, worker, weight)
-        if solution:
-            self.ledger.block(work, nonce, ident)
-        return ident
 
     def apply_info(self, info):
         """Release solved-height suppression only after an observed applied branch change."""
@@ -334,8 +375,8 @@ class Pool:
         if changed:
             self.solved_height = height
             self.work = None
-            for client in tuple(self.clients):
-                client.jobs.clear()
+            self.pending_solution = None
+            self.retire_jobs("branch_replaced")
         if changed or type(height) is int and self.solution_ack_height is not None and height >= self.solution_ack_height:
             self.solution_ack_at = None
             self.solution_ack_height = None
@@ -348,6 +389,7 @@ class Pool:
             self.solved_height = height
             self.solution_ack_height = height
             self.solution_ack_at = time.monotonic()
+            self.pending_solution = None
 
     def expire_solution_ack(self, work, fresh_info, now=None):
         """Retry a stuck native acknowledgement only against a freshly synchronized next-block template."""
@@ -358,7 +400,8 @@ class Pool:
         height, ident = info.get("fullHeight"), info.get("bestFullHeaderId")
         synced = type(height) is int and height >= 1 and info.get("headersHeight") == height \
             and isinstance(ident, str) and bool(ident) and info.get("bestHeaderId") == ident
-        if not synced or type(work.get("h")) is not int or work["h"] != height + 1 \
+        if not synced or work.get("nodeSolved") or work.get("workVersion") == 1 and work.get("parentId") != ident \
+                or type(work.get("h")) is not int or work["h"] != height + 1 \
                 or work["h"] != self.solved_height or self.solution_ack_height != self.solved_height \
                 or now - self.solution_ack_at < SOLUTION_ACK_SECONDS:
             return False
@@ -366,8 +409,7 @@ class Pool:
         self.solution_ack_at = None
         self.solution_ack_height = None
         self.work = None
-        for client in tuple(self.clients):
-            client.jobs.clear()
+        self.retire_jobs("unapplied_solution_retry")
         return True
 
     def ready(self):
@@ -379,9 +421,13 @@ class Pool:
 
     async def accept(self, reader, writer):
         self.ensure_resources()
+        task = asyncio.current_task()
+        self.client_tasks.add(task)
         admitted = False
         identity = writer.get_extra_info("peername")[0]
         try:
+            if self.stopping:
+                return
             if not self.permitted(writer):
                 return
             if self.config.get("stratumProxyProtocol"):
@@ -416,12 +462,12 @@ class Pool:
                 await asyncio.wait_for(writer.wait_closed(), 2)
             except (OSError, asyncio.TimeoutError):
                 pass
+            self.client_tasks.discard(task)
 
     async def broadcast(self, clean):
-        results = await asyncio.gather(*(c.job(clean) for c in tuple(self.clients)), return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                LOG.warning("Worker notification failed: %s", type(result).__name__)
+        # A slow socket owns at most one coalescing sender and never delays polling for other miners.
+        for client in tuple(self.clients):
+            client.schedule_job(clean)
 
     async def update(self):
         while True:
@@ -432,19 +478,16 @@ class Pool:
                     await self.lanes["writes"].run(self.ledger.bind_network, self.config["genesisId"], self.node.pk)
                     self.checked_at = time.monotonic()
                     fresh_info = True
-                work = await self.lanes["templates"].run(self.node.rpc, "/mining/candidate")
-                work["b"] = int(work["b"])
-                if work["pk"] != self.node.pk or len(bytes.fromhex(work["msg"])) != 32 or not 0 < work["b"] <= MAX_TARGET:
-                    raise ValueError("Invalid node work template")
+                work = await self.lanes["templates"].run(self.node.work)
+                # Recovery must see the same strictly parsed target and cache snapshot as job installation.
+                work = candidate_work(work, self.node.pk)
                 self.expire_solution_ack(work, fresh_info)
-                changed = not self.work or work["msg"] != self.work["msg"]
-                self.work = work
+                self.expire_pending_solution(work, fresh_info)
+                changed, clean = self.install_work(work)
                 self.error = None
                 if changed:
                     LOG.info("New job at height %s", work["h"])
-                    await self.broadcast(True)
-                elif any(c.subscribed and c.username and time.monotonic() - c.last_send >= 20 for c in self.clients):
-                    await self.broadcast(False)
+                    await self.broadcast(clean)
                 if time.monotonic() - self.last_reconcile >= 5 and \
                         (self.reconcile_task is None or self.reconcile_task.done()):
                     self.reconcile_task = asyncio.create_task(self.reconcile(self.info["fullHeight"]))
@@ -628,6 +671,7 @@ class Pool:
         LOG.info("Zyrex Stratum listening on %s", self.config["publicStratumUrl"])
         async with stratum, http:
             await stop.wait()
+            self.stopping = True
         update.cancel()
         await asyncio.gather(update, return_exceptions=True)
         if self.reconcile_task:
@@ -635,6 +679,11 @@ class Pool:
             await asyncio.gather(self.reconcile_task, return_exceptions=True)
         for client in tuple(self.clients):
             client.writer.close()
+        # A committed executor write can finish after its socket closes; drain it before taking the solution snapshot.
+        if self.client_tasks:
+            await asyncio.gather(*tuple(self.client_tasks), return_exceptions=True)
+        if self.solution_task is not None:
+            await asyncio.gather(self.solution_task, return_exceptions=True)
         for lane in self.lanes.values():
             lane.close()
 

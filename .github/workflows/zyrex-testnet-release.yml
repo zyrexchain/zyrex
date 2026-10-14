@@ -28,7 +28,7 @@ jobs:
           scripts/sbt
           'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification
           *MessageSerializerSpecification *NetworkControllerSpec
-          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *MiningApiRouteSpec'
+          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *ZyrexMiningWorkSnapshotSpec *MiningApiRouteSpec'
           'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
           *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
       - name: Preserve native DAA comparison evidence

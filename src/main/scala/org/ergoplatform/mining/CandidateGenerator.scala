@@ -173,6 +173,61 @@ class CandidateGenerator(
         .scheduleOnce(100.millis, self, m)(context.dispatcher, sender())
   }
 
+  /** Prepare work and return cache metadata from the same actor-state snapshot. */
+  private def prepareCandidate(state: CandidateGeneratorState, gen: GenerateCandidate, details: Boolean): Unit = {
+    val GenerateCandidate(txsToInclude, reply, forced, optPk) = gen
+    def response(candidate: Candidate, previous: Option[Candidate]): Any =
+      if (details) MiningWorkSnapshot(candidate, previous, state.solvedBlock.nonEmpty) else candidate
+    val senderOpt = if (reply) Some(sender()) else None
+    val effectiveMinerPk = optPk.getOrElse(minerPk)
+    if (!forced && cachedFor(state.cachedCandidate, txsToInclude, effectiveMinerPk)) {
+      senderOpt.foreach(_ ! StatusReply.success(response(state.cachedCandidate.get, state.cachedPreviousCandidate)))
+    } else {
+      val start = System.currentTimeMillis()
+      CandidateGenerator.generateCandidate(
+        state.hr,
+        state.sr,
+        state.mpr,
+        effectiveMinerPk,
+        txsToInclude,
+        state.lastAppliedBlockTxs,
+        ergoSettings
+      ) match {
+        case Some(Failure(ex)) =>
+          log.error(s"Candidate generation failed", ex)
+          senderOpt.foreach(
+            _ ! StatusReply.error(s"Candidate generation failed : ${ex.getMessage}")
+          )
+        case Some(Success((candidate, eliminatedTxs))) =>
+          if (eliminatedTxs.ids.nonEmpty) {
+            viewHolderRef ! eliminatedTxs
+          }
+          val generationTook = System.currentTimeMillis() - start
+          log.info(s"Generated new candidate in $generationTook ms")
+          context.become(
+            initialized(
+              state.copy(
+                cachedCandidate = Some(candidate),
+                cachedPreviousCandidate = state.cachedCandidate,
+                avgGenTime = generationTook.millis
+              )
+            )
+          )
+          senderOpt.foreach(_ ! StatusReply.success(response(candidate, state.cachedCandidate)))
+        case None =>
+          log.warn(
+            "Can not generate block candidate: either mempool is empty or chain is not synced (maybe last block not fully applied yet"
+          )
+          senderOpt.foreach { s =>
+            context.system.scheduler.scheduleOnce(state.avgGenTime, self, if (details) ReadCandidateDetails else gen)(
+              context.system.dispatcher,
+              s
+            )
+          }
+      }
+    }
+  }
+
   private def initialized(state: CandidateGeneratorState): Receive = {
     case ChangedHistory(h: ErgoHistoryReader) =>
       context.become(initialized(state.copy(hr = h)))
@@ -227,51 +282,11 @@ class CandidateGenerator(
     case SyntacticallyFailedModification(_, modId, error) =>
       onSolvedBlockFailed(state, modId, error)
 
-    case gen @ GenerateCandidate(txsToInclude, reply, forced, optPk) =>
-      val senderOpt = if (reply) Some(sender()) else None
-      val effectiveMinerPk = optPk.getOrElse(minerPk)
-      if (!forced && cachedFor(state.cachedCandidate, txsToInclude, effectiveMinerPk)) {
-        senderOpt.foreach(_ ! StatusReply.success(state.cachedCandidate.get))
-      } else {
-        val start = System.currentTimeMillis()
-        CandidateGenerator.generateCandidate(
-          state.hr,
-          state.sr,
-          state.mpr,
-          effectiveMinerPk,
-          txsToInclude,
-          state.lastAppliedBlockTxs,
-          ergoSettings
-        ) match {
-          case Some(Failure(ex)) =>
-            log.error(s"Candidate generation failed", ex)
-            senderOpt.foreach(
-              _ ! StatusReply.error(s"Candidate generation failed : ${ex.getMessage}")
-            )
-          case Some(Success((candidate, eliminatedTxs))) =>
-            if (eliminatedTxs.ids.nonEmpty) {
-              viewHolderRef ! eliminatedTxs
-            }
-            val generationTook = System.currentTimeMillis() - start
-            log.info(s"Generated new candidate in $generationTook ms")
-            context.become(
-              initialized(
-                state.copy(cachedCandidate = Some(candidate), cachedPreviousCandidate = state.cachedCandidate, avgGenTime = generationTook.millis)
-              )
-            )
-            senderOpt.foreach(_ ! StatusReply.success(candidate))
-          case None =>
-            log.warn(
-              "Can not generate block candidate: either mempool is empty or chain is not synced (maybe last block not fully applied yet"
-            )
-            senderOpt.foreach { s =>
-              context.system.scheduler.scheduleOnce(state.avgGenTime, self, gen)(
-                context.system.dispatcher,
-                s
-              )
-            }
-        }
-      }
+    case gen: GenerateCandidate =>
+      prepareCandidate(state, gen, details = false)
+
+    case ReadCandidateDetails =>
+      prepareCandidate(state, GenerateCandidate(Seq.empty, reply = true, forced = false), details = true)
 
     case preSolution: AutolykosSolution
         if state.solvedBlock.isEmpty && state.cachedCandidate.nonEmpty =>
@@ -296,6 +311,9 @@ class CandidateGenerator(
 }
 
 object CandidateGenerator extends ScorexLogging {
+
+  /** Opt-in snapshot used by pool clients; legacy candidate replies remain unchanged. */
+  case object ReadCandidateDetails
 
   case class SubmitSolution(solution: AutolykosSolution, requestedMessage: Option[Array[Byte]])
 

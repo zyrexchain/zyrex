@@ -10,7 +10,7 @@ import io.circe.Json
 import io.circe.syntax._
 import org.ergoplatform.http.api.MiningApiRoute
 import org.ergoplatform.http.api.requests.MiningRequest
-import org.ergoplatform.mining.{AutolykosSolution, CandidateGenerator, MiningSolutionSelection}
+import org.ergoplatform.mining.{AutolykosSolution, CandidateBlock, CandidateGenerator, MiningSolutionSelection, MiningWorkSnapshot}
 import org.ergoplatform.settings.ErgoSettings
 import org.ergoplatform.utils.Stubs
 import org.ergoplatform.utils.generators.ErgoCoreGenerators.genECPoint
@@ -52,6 +52,47 @@ class MiningApiRouteSpec
     Get(prefix + "/candidate") ~> route ~> check {
       status shouldBe StatusCodes.OK
       Try(responseAs[Json]) shouldBe 'success
+    }
+  }
+
+  it should "keep the legacy candidate payload unchanged when details are absent or false" in {
+    Seq("/candidate", "/candidate?details=false").foreach { endpoint =>
+      Get(prefix + endpoint) ~> route ~> check {
+        status shouldBe StatusCodes.OK
+        responseAs[Json].noSpaces shouldBe externalWorkMessage.asJson.noSpaces
+      }
+    }
+  }
+
+  it should "request atomic work details only when explicitly selected" in {
+    val block = chain.head
+    val header = block.header
+    val candidateBlock = CandidateBlock(Some(header), header.version, header.nBits,
+      header.stateRoot, block.adProofs.get.proofBytes, block.transactions, header.timestamp,
+      block.extension, header.votes)
+    val candidate = CandidateGenerator.Candidate(candidateBlock, externalWorkMessage, Seq.empty)
+    val detailedMiner = system.actorOf(Props(new Actor {
+      override def receive: Receive = {
+        case CandidateGenerator.ReadCandidateDetails =>
+          sender() ! StatusReply.success(MiningWorkSnapshot(candidate, None, nodeSolved = true))
+      }
+    }))
+    val detailedRoute = MiningApiRoute(detailedMiner, localSetting).route
+    Get(prefix + "/candidate?details=true") ~> detailedRoute ~> check {
+      status shouldBe StatusCodes.OK
+      val json = responseAs[Json]
+      json.hcursor.downField("parentId").as[String] shouldBe Right(header.id)
+      json.hcursor.downField("activeMessages").as[Seq[String]] shouldBe Right(Seq("02" * 32))
+      json.hcursor.downField("nodeSolved").as[Boolean] shouldBe Right(true)
+      externalWorkMessage.asJson.asObject.get.toIterable.foreach { case (key, value) =>
+        json.hcursor.downField(key).focus shouldBe Some(value)
+      }
+    }
+  }
+
+  it should "reject invalid details flags before requesting mining work" in {
+    Get(prefix + "/candidate?details=invalid") ~> Route.seal(route) ~> check {
+      status shouldBe StatusCodes.BadRequest
     }
   }
 

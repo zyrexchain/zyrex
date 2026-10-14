@@ -2060,6 +2060,9 @@ components:
           type: integer
           description: Work target value
           example: 987654321
+        h:
+          type: integer
+          description: Candidate height, present for Autolykos v2.
         pk:
           type: string
           description: Base16-encoded miner public key
@@ -2067,6 +2070,37 @@ components:
         proof:
           type: object
           $ref: '#/components/schemas/ProofOfUpcomingTransactions'
+
+    DetailedWorkMessage:
+      description: Atomic candidate and compatible work-cache snapshot, returned only with details=true.
+      allOf:
+        - $ref: '#/components/schemas/WorkMessage'
+        - type: object
+          required:
+            - workVersion
+            - parentId
+            - activeMessages
+            - nodeSolved
+          properties:
+            workVersion:
+              type: integer
+              enum: [1]
+            parentId:
+              type: string
+              pattern: '^[0-9a-f]{64}$'
+              description: Canonical parent identifier of the returned candidate.
+            activeMessages:
+              type: array
+              minItems: 1
+              maxItems: 2
+              uniqueItems: true
+              description: Current message first, then the previous cached message only with the same parent, height, public key and target.
+              items:
+                type: string
+                pattern: '^[0-9a-f]{64}$'
+            nodeSolved:
+              type: boolean
+              description: A locally solved block is awaiting application; clients should pause new work until it clears.
 
     Peer:
       type: object
@@ -5188,15 +5222,25 @@ paths:
     get:
       summary: Request block candidate
       operationId: miningRequestBlockCandidate
+      parameters:
+        - in: query
+          name: details
+          required: false
+          description: Include an atomic cache snapshot. Omitted or false preserves the legacy response.
+          schema:
+            type: boolean
+            default: false
       tags:
         - mining
       responses:
         '200':
-          description: External candidate
+          description: External candidate; details=true returns DetailedWorkMessage.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WorkMessage'
+                anyOf:
+                  - $ref: '#/components/schemas/WorkMessage'
+                  - $ref: '#/components/schemas/DetailedWorkMessage'
         default:
           description: Error
           content:

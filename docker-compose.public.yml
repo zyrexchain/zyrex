@@ -44,7 +44,7 @@ services:
       interval: 5s
       timeout: 6s
       retries: 30
-    stop_grace_period: 15s
+    stop_grace_period: 30s
   explorer:
     build:
       context: .

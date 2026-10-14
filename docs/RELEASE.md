@@ -6,6 +6,15 @@ consensus regressions, and preserve source-bound bootstrap and DAA evidence.
 Checksums identify the exact artifacts; they are not a complete security audit
 or a claim of byte-identical builds on arbitrary toolchains.
 
+The pool uses an opt-in atomic native work-cache snapshot to revoke old block
+jobs and retain compatible cached transaction-only updates. Notifications are
+coalesced per worker; duplicate work no longer churns job IDs. Accepted block
+solutions survive a disconnected share-acknowledgement socket. Graceful shutdown
+drains admitted writes and the native submission before closing executors. Work-result
+diagnostics distinguish stale, duplicate, invalid and resource-limited shares
+and are explicitly scoped to the current pool process lifetime. These changes
+do not alter consensus, emission, difficulty or transaction fee policy.
+
 Private CI uses a disposable four-node network with its native sixty-second
 target. The pool check allows thirty minutes for proof search, competition with
 the native miner, reward maturity and confirmed payments to both receiving

@@ -9,7 +9,7 @@ import io.circe.Json
 import org.bouncycastle.util.encoders.Hex
 import org.ergoplatform.http.api.requests.{MiningRequest, MiningSolutionRequest}
 import org.ergoplatform.mining.CandidateGenerator.Candidate
-import org.ergoplatform.mining.{CandidateGenerator, ErgoMiner, MiningSolutionSelection}
+import org.ergoplatform.mining.{CandidateGenerator, ErgoMiner, MiningSolutionSelection, MiningWorkSnapshot}
 import org.ergoplatform.modifiers.mempool.ErgoTransaction
 import org.ergoplatform.nodeView.wallet.ErgoAddressJsonEncoder
 import org.ergoplatform.settings.{ErgoSettings, RESTApiSettings}
@@ -42,10 +42,15 @@ case class MiningApiRoute(miner: ActorRef,
   /**
     * Get block candidate. Useful for external miners.
     */
-  def candidateR: Route = (path("candidate") & pathEndOrSingleSlash & get) {
-    val prepareCmd = CandidateGenerator.GenerateCandidate(Seq.empty, reply = true, forced = false)
-    val candidateF = miner.askWithStatus(prepareCmd).mapTo[Candidate].map(_.externalVersion)
-    ApiResponse(candidateF)
+  def candidateR: Route = (path("candidate") & pathEndOrSingleSlash & get
+    & parameter("details".as[Boolean] ? false)) { details =>
+    if (details) {
+      ApiResponse(miner.askWithStatus(CandidateGenerator.ReadCandidateDetails).mapTo[MiningWorkSnapshot])
+    } else {
+      val prepareCmd = CandidateGenerator.GenerateCandidate(Seq.empty, reply = true, forced = false)
+      val candidateF = miner.askWithStatus(prepareCmd).mapTo[Candidate].map(_.externalVersion)
+      ApiResponse(candidateF)
+    }
   }
 
   /**

@@ -42,7 +42,7 @@ services:
       interval: 5s
       timeout: 6s
       retries: 24
-    stop_grace_period: 15s
+    stop_grace_period: 30s
 volumes:
   poolnode: {}
   pool: {}

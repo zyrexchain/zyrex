@@ -28,7 +28,7 @@ jobs:
         run: >-
           scripts/sbt 'testOnly *ZyrexConsensusSpec *ZyrexTestKeysSpec *ErgoSettingsSpecification
           *MessageSerializerSpecification *NetworkControllerSpec
-          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *MiningApiRouteSpec'
+          *ZyrexMiningBindingSpec *ZyrexMiningActorSpec *ZyrexMiningWorkSnapshotSpec *MiningApiRouteSpec'
           'zyrexCore/testOnly *DifficultyAdjustmentSpecification *AutolykosPowSchemeSpec
           *ZyrexExplorerAddressSpec *ZyrexDaaStressSpec *ZyrexPoolHeaderSpec' assembly
       - name: Native DAA stress evidence for each source configuration
